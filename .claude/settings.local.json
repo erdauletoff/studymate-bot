@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir /s /b E:studymate-botbackend E:studymate-botbot)",
+      "Bash(findstr:*)",
+      "Bash(python manage.py makemigrations:*)",
+      "Bash(python manage.py migrate:*)",
+      "Bash(python -c \"from bot.handlers import quiz; print\\(''Quiz handler imported successfully''\\)\")",
+      "Bash(python -c:*)"
+    ]
+  }
+}
