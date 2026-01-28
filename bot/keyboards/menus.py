@@ -30,8 +30,7 @@ def student_menu(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=t("btn_lesson_materials", lang)), KeyboardButton(text=t("btn_quizzes", lang))],
-            [KeyboardButton(text=t("btn_ask_question", lang))],
-            [KeyboardButton(text=t("btn_language", lang))]
+            [KeyboardButton(text=t("btn_ask_question", lang)), KeyboardButton(text=t("btn_language", lang))]
         ],
         resize_keyboard=True
     )

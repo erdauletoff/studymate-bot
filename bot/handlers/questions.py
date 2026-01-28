@@ -6,7 +6,7 @@ from aiogram.fsm.state import State, StatesGroup
 from bot.keyboards import student_menu, cancel_menu
 from bot.texts import t
 from bot.db import (
-    is_mentor, get_student_mentor, create_question, 
+    is_mentor, get_student_mentor, get_student_by_telegram_id, create_question,
     mark_question_answered, get_user_language
 )
 
@@ -52,7 +52,10 @@ async def receive_question(message: Message, state: FSMContext, bot: Bot):
         await message.answer(t("error", lang))
         return
 
-    question = await create_question(mentor, message.text)
+    # Get student for tracking in admin panel
+    student = await get_student_by_telegram_id(message.from_user.id)
+
+    question = await create_question(mentor, message.text, student)
     
     # Get mentor's language for the notification
     mentor_lang = await get_user_language(mentor.telegram_id)

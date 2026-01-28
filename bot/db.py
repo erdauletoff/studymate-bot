@@ -199,8 +199,8 @@ def get_materials_count_by_topics(topics) -> dict:
 # ==================== QUESTIONS ====================
 
 @sync_to_async
-def create_question(mentor, text: str):
-    return Question.objects.create(mentor=mentor, text=text)
+def create_question(mentor, text: str, student=None):
+    return Question.objects.create(mentor=mentor, text=text, student=student)
 
 
 @sync_to_async

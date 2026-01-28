@@ -1,9 +1,27 @@
+import asyncio
+import time
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
+QUESTION_TIMEOUT = 15  # seconds per question
+
+# Store active timers: {attempt_id: (timeout_task, countdown_task)}
+active_timers = {}
+
 from bot.keyboards import mentor_menu, student_menu
+
+
+def get_option_text(question, letter: str) -> str:
+    """Get full option text by letter (A, B, C, D)"""
+    options = {
+        'A': question.option_a,
+        'B': question.option_b,
+        'C': question.option_c,
+        'D': question.option_d,
+    }
+    return options.get(letter.upper(), letter)
 from bot.texts import t
 from bot.db import (
     is_mentor, get_mentor_by_telegram_id, get_student_by_telegram_id,
@@ -316,10 +334,12 @@ async def review_quiz_answers(callback: CallbackQuery):
     for answer in answers:
         q = answer.question
         q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
+        selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
         if answer.is_correct:
-            review_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=answer.selected_answer)
+            review_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
         else:
-            review_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=answer.selected_answer, correct=q.correct_answer)
+            correct_text = get_option_text(q, q.correct_answer)
+            review_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
 
     text = t("quiz_your_result", lang, score=attempt.score, total=attempt.total) + review_text
 
@@ -332,7 +352,7 @@ async def review_quiz_answers(callback: CallbackQuery):
 # ==================== STUDENT: TAKE QUIZ ====================
 
 @router.callback_query(F.data.startswith("startquiz_"))
-async def start_quiz(callback: CallbackQuery, state: FSMContext):
+async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
     lang = await get_user_language(callback.from_user.id)
     quiz_id = int(callback.data.replace("startquiz_", ""))
     quiz = await get_quiz_by_id(quiz_id)
@@ -377,12 +397,11 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext):
     )
 
     # Show first question
-    await show_question(callback.message, questions[0], 1, len(questions), lang, attempt.id, edit=True)
+    await show_question(callback.message, questions[0], 1, len(questions), lang, attempt.id, state, bot, edit=True)
     await callback.answer()
 
-
-async def show_question(message, question, current: int, total: int, lang: str, attempt_id: int, edit: bool = False):
-    text = t("quiz_question", lang,
+async def show_question(message, question, current: int, total: int, lang: str, attempt_id: int, state: FSMContext, bot: Bot, edit: bool = False):
+    base_text = t("quiz_question", lang,
              current=current,
              total=total,
              text=question.question_text,
@@ -398,14 +417,154 @@ async def show_question(message, question, current: int, total: int, lang: str, 
         InlineKeyboardButton(text="D", callback_data=f"ans_{attempt_id}_{question.id}_D"),
     ]]
 
+    # Show question with initial timer
+    text_with_timer = base_text + f"\n\n⏱ {QUESTION_TIMEOUT} {t('quiz_seconds', lang)}"
+
     if edit:
-        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        sent_message = await message.edit_text(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     else:
-        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        sent_message = await message.answer(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+    # Pin the quiz message
+    try:
+        await bot.pin_chat_message(chat_id=message.chat.id, message_id=sent_message.message_id, disable_notification=True)
+        # Store pinned message info in state
+        await state.update_data(pinned_message_id=sent_message.message_id, pinned_chat_id=message.chat.id)
+    except Exception:
+        pass  # Pin might fail due to permissions
+
+    # Cancel previous timers if exist
+    if attempt_id in active_timers:
+        timeout_task, countdown_task = active_timers[attempt_id]
+        if timeout_task:
+            timeout_task.cancel()
+        if countdown_task:
+            countdown_task.cancel()
+
+    # Single time source
+    start_time = time.monotonic()
+    end_time = start_time + QUESTION_TIMEOUT
+
+    # Start countdown updater task
+    countdown_task = asyncio.create_task(
+        update_countdown(sent_message if not edit else message, base_text, buttons, end_time, lang)
+    )
+
+    # Start timeout task
+    timeout_task = asyncio.create_task(
+        question_timeout(sent_message if not edit else message, attempt_id, question.id, current, total, lang, state, end_time, bot)
+    )
+
+    active_timers[attempt_id] = (timeout_task, countdown_task)
+
+
+async def update_countdown(message, base_text: str, buttons: list, end_time: float, lang: str):
+    """Update countdown timer - shows seconds remaining"""
+    try:
+        last_displayed = None
+        while True:
+            remaining = int(end_time - time.monotonic())
+            if remaining <= 0:
+                break
+
+            # Only update when the second changes
+            if remaining != last_displayed:
+                last_displayed = remaining
+                try:
+                    text_with_timer = base_text + f"\n\n⏱ {remaining} {t('quiz_seconds', lang)}"
+                    await message.edit_text(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+                except Exception:
+                    pass  # Message might be deleted or already modified
+
+            # Sleep until next second boundary
+            await asyncio.sleep(0.5)
+
+    except asyncio.CancelledError:
+        pass  # Timer was cancelled
+
+
+async def question_timeout(message, attempt_id: int, question_id: int, current: int, total: int, lang: str, state: FSMContext, end_time: float, bot: Bot):
+    """Handle question timeout - auto-skip to next question"""
+    try:
+        # Wait until end_time
+        wait_duration = max(0, end_time - time.monotonic())
+        await asyncio.sleep(wait_duration)
+
+        # Check if still on the same question
+        data = await state.get_data()
+        if data.get("attempt_id") != attempt_id:
+            return
+        if data.get("current_index", 0) != current - 1:
+            return  # Already moved to next question
+
+        # Get question and save as wrong (no answer)
+        question = await get_question_by_id(question_id)
+        if not question:
+            return
+
+        attempt = await get_attempt_by_id(attempt_id)
+        if not attempt:
+            return
+
+        # Save empty answer as wrong
+        await save_quiz_answer(attempt, question, "-")  # "-" means timeout/no answer
+
+        current_index = current  # current is 1-based, current_index is 0-based
+        question_ids = data.get("question_ids", [])
+        score = data.get("score", 0)
+
+        if current_index >= len(question_ids):
+            # Quiz finished
+            await finish_quiz_attempt(attempt_id, score)
+            quiz = await get_quiz_by_id(data["quiz_id"])
+            avg = await get_quiz_average_score(quiz)
+
+            # Unpin quiz message
+            pinned_chat_id = data.get("pinned_chat_id")
+            if pinned_chat_id:
+                try:
+                    await bot.unpin_chat_message(chat_id=pinned_chat_id)
+                except Exception:
+                    pass  # Unpin might fail
+
+            await state.clear()
+
+            # Remove timers
+            if attempt_id in active_timers:
+                _, countdown_task = active_timers[attempt_id]
+                if countdown_task:
+                    countdown_task.cancel()
+                del active_timers[attempt_id]
+
+            # Build result with review
+            result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")
+
+            answers = await get_attempt_answers(attempt)
+            result_text += t("quiz_review_header", lang)
+
+            for answer in answers:
+                q = answer.question
+                q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
+                selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
+                if answer.is_correct:
+                    result_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
+                else:
+                    correct_text = get_option_text(q, q.correct_answer)
+                    result_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
+
+            await message.edit_text(result_text, parse_mode="HTML")
+        else:
+            # Show next question
+            await state.update_data(current_index=current_index, score=score)
+            next_question = await get_question_by_id(question_ids[current_index])
+            await show_question(message, next_question, current_index + 1, len(question_ids), lang, attempt_id, state, bot, edit=True)
+
+    except asyncio.CancelledError:
+        pass  # Timer was cancelled (user answered in time)
 
 
 @router.callback_query(F.data.startswith("ans_"))
-async def handle_answer(callback: CallbackQuery, state: FSMContext):
+async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     lang = await get_user_language(callback.from_user.id)
 
     # Parse callback data
@@ -413,6 +572,15 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext):
     attempt_id = int(parts[1])
     question_id = int(parts[2])
     selected = parts[3]
+
+    # Cancel timers (both timeout and countdown)
+    if attempt_id in active_timers:
+        timeout_task, countdown_task = active_timers[attempt_id]
+        if timeout_task:
+            timeout_task.cancel()
+        if countdown_task:
+            countdown_task.cancel()
+        del active_timers[attempt_id]
 
     # Verify state
     data = await state.get_data()
@@ -449,6 +617,14 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext):
         quiz = await get_quiz_by_id(data["quiz_id"])
         avg = await get_quiz_average_score(quiz)
 
+        # Unpin quiz message
+        pinned_chat_id = data.get("pinned_chat_id")
+        if pinned_chat_id:
+            try:
+                await bot.unpin_chat_message(chat_id=pinned_chat_id)
+            except Exception:
+                pass  # Unpin might fail
+
         await state.clear()
 
         # Build result with review
@@ -461,17 +637,18 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext):
         for answer in answers:
             q = answer.question
             q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
+            selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
             if answer.is_correct:
-                result_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=answer.selected_answer)
+                result_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
             else:
-                result_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=answer.selected_answer, correct=q.correct_answer)
+                correct_text = get_option_text(q, q.correct_answer)
+                result_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
 
         await callback.message.edit_text(result_text, parse_mode="HTML")
-        await callback.message.answer(t("select_quiz", lang), reply_markup=student_menu(lang))
     else:
         # Show next question
         await state.update_data(current_index=current_index, score=score)
         next_question = await get_question_by_id(question_ids[current_index])
-        await show_question(callback.message, next_question, current_index + 1, len(question_ids), lang, attempt_id, edit=True)
+        await show_question(callback.message, next_question, current_index + 1, len(question_ids), lang, attempt_id, state, bot, edit=True)
 
     await callback.answer()

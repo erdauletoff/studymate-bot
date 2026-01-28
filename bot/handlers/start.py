@@ -23,7 +23,7 @@ async def check_group_membership(bot: Bot, user_id: int, group_chat_id: int) -> 
 
 
 @router.message(Command("start"))
-async def cmd_start(message: Message, bot: Bot, state: FSMContext):
+async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=False):
     user_id = message.from_user.id
     await state.clear()
     
@@ -50,10 +50,16 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext):
             )
             await assign_student_to_mentor(student, mentor)
 
-            await message.answer(
-                t("welcome_student", lang, name=mentor.name),
-                reply_markup=student_menu(lang)
-            )
+            if is_cancel:
+                await message.answer(
+                    t("cancelled", lang),
+                    reply_markup = student_menu(lang)
+                )
+            else:
+                await message.answer(
+                    t("welcome_student", lang, name=mentor.name),
+                    reply_markup=student_menu(lang)
+                )
             return
 
     await message.answer(t("access_denied", lang))
@@ -91,10 +97,10 @@ async def set_language(callback: CallbackQuery, bot: Bot):
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, bot: Bot, state: FSMContext):
     await state.clear()
-    await cmd_start(message, bot, state)
+    await cmd_start(message, bot, state, True)
 
 
 @router.message(F.text.in_(["❌ Отмена", "❌ Biykar etiw", "❌ Cancel"]))
 async def btn_cancel(message: Message, bot: Bot, state: FSMContext):
     await state.clear()
-    await cmd_start(message, bot, state)
+    await cmd_start(message, bot, state, True)
