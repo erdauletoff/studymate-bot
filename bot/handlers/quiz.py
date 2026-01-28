@@ -1,16 +1,19 @@
 import asyncio
+import csv
+import io
 import time
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-QUESTION_TIMEOUT = 15  # seconds per question
+QUESTION_TIMEOUT = 20  # seconds per question
+QUESTIONS_PER_PAGE = 5
 
 # Store active timers: {attempt_id: (timeout_task, countdown_task)}
 active_timers = {}
 
-from bot.keyboards import mentor_menu, student_menu
+from bot.keyboards import mentor_menu, student_menu, cancel_menu
 
 
 def get_option_text(question, letter: str) -> str:
@@ -26,12 +29,14 @@ from bot.texts import t
 from bot.db import (
     is_mentor, get_mentor_by_telegram_id, get_student_by_telegram_id,
     get_student_mentor, get_user_language,
-    create_quiz, get_quizzes_by_mentor, get_quiz_by_id, delete_quiz,
+    create_quiz, get_quizzes_by_mentor, get_active_quizzes_by_mentor, get_quiz_by_id,
     create_quiz_question, get_questions_by_quiz, get_question_by_id,
     create_quiz_attempt, finish_quiz_attempt, get_student_attempt,
     has_student_attempted, get_quiz_attempts, get_quiz_average_score,
-    get_quiz_stats, get_quiz_top_students, save_quiz_answer,
-    get_attempt_by_id, get_attempt_answers
+    get_quiz_stats, get_quiz_stats_by_ids, get_quiz_top_students, save_quiz_answer,
+    get_attempt_by_id, get_attempt_answers, set_quiz_active,
+    delete_quiz_question, get_next_quiz_question_order, update_quiz_question,
+    archive_quizzes_by_title, quiz_title_exists
 )
 from bot.utils.quiz_parser import parse_quiz_file
 
@@ -40,7 +45,87 @@ router = Router()
 
 class QuizStates(StatesGroup):
     waiting_quiz_file = State()
+    waiting_quiz_confirm = State()
     taking_quiz = State()
+
+
+class QuizManageStates(StatesGroup):
+    waiting_question_text = State()
+    waiting_option_a = State()
+    waiting_option_b = State()
+    waiting_option_c = State()
+    waiting_option_d = State()
+    waiting_correct_option = State()
+    waiting_edit_value = State()
+
+
+def build_questions_keyboard(questions, quiz_id: int, lang: str, page: int = 0) -> InlineKeyboardMarkup:
+    total_pages = (len(questions) + QUESTIONS_PER_PAGE - 1) // QUESTIONS_PER_PAGE or 1
+    start = page * QUESTIONS_PER_PAGE
+    end = start + QUESTIONS_PER_PAGE
+    page_questions = questions[start:end]
+
+    buttons = []
+    for i, q in enumerate(page_questions, start=start + 1):
+        preview = q.question_text[:40] + ("..." if len(q.question_text) > 40 else "")
+        buttons.append([InlineKeyboardButton(
+            text=f"{i}. {preview}",
+            callback_data=f"quizq_{quiz_id}_{q.id}"
+        )])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=t("btn_prev", lang), callback_data=f"quizqpage_{quiz_id}_{page - 1}"))
+    if total_pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"quizqpage_{quiz_id}_{page + 1}"))
+    if nav:
+        buttons.append(nav)
+
+    buttons.append([InlineKeyboardButton(text=t("btn_add_question", lang), callback_data=f"quizaddq_{quiz_id}")])
+    buttons.append([InlineKeyboardButton(text=t("btn_back_quiz", lang), callback_data=f"quizmanage_{quiz_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def build_quiz_preview_text(parsed: dict, title: str, lang: str) -> str:
+    questions = parsed.get("questions", [])
+    topic = parsed.get("topic")
+    count = len(questions)
+    preview = ""
+    if questions:
+        q = questions[0]
+        preview = t(
+            "quiz_preview_question",
+            lang,
+            text=q["text"],
+            a=q["option_a"],
+            b=q["option_b"],
+            c=q["option_c"],
+            d=q["option_d"]
+        )
+    return t(
+        "quiz_preview",
+        lang,
+        title=title,
+        topic=topic or "-",
+        count=count,
+        preview=preview
+    )
+
+
+async def ensure_unique_quiz_title(mentor, title: str) -> str:
+    if not await quiz_title_exists(mentor, title):
+        return title
+    base = f"{title} (copy)"
+    if not await quiz_title_exists(mentor, base):
+        return base
+    i = 2
+    while True:
+        candidate = f"{title} (copy {i})"
+        if not await quiz_title_exists(mentor, candidate):
+            return candidate
+        i += 1
 
 
 # ==================== MENTOR HANDLERS ====================
@@ -62,13 +147,15 @@ async def quiz_menu(message: Message, state: FSMContext):
 
 async def show_mentor_quizzes(message: Message, lang: str):
     mentor = await get_mentor_by_telegram_id(message.from_user.id)
-    quizzes = await get_quizzes_by_mentor(mentor)
+    quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
+    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in quizzes])
 
     buttons = []
     for quiz in quizzes:
-        stats = await get_quiz_stats(quiz)
+        stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+        title = quiz.title if quiz.is_active else f"🗄️ {quiz.title}"
         buttons.append([InlineKeyboardButton(
-            text=t("quiz_item_mentor", lang, title=quiz.title, questions=stats['questions'], attempts=stats['attempts']),
+            text=t("quiz_item_mentor", lang, title=title, questions=stats['questions'], attempts=stats['attempts']),
             callback_data=f"quizmanage_{quiz.id}"
         )])
 
@@ -83,7 +170,7 @@ async def show_mentor_quizzes(message: Message, lang: str):
 
 
 async def show_student_quizzes(message: Message, mentor, lang: str):
-    quizzes = await get_quizzes_by_mentor(mentor)
+    quizzes = await get_active_quizzes_by_mentor(mentor)
     student = await get_student_by_telegram_id(message.from_user.id)
 
     if not quizzes:
@@ -136,12 +223,57 @@ async def receive_quiz_file(message: Message, state: FSMContext, bot: Bot):
         await state.clear()
         return
 
-    # Create quiz
     mentor = await get_mentor_by_telegram_id(message.from_user.id)
     title = parsed.get("title") or message.document.file_name.replace(".txt", "")
-    quiz = await create_quiz(mentor, title, parsed.get("topic"))
 
-    # Create questions
+    await state.set_state(QuizStates.waiting_quiz_confirm)
+    await state.update_data(parsed=parsed, title=title, topic=parsed.get("topic"))
+
+    preview_text = build_quiz_preview_text(parsed, title, lang)
+
+    if await quiz_title_exists(mentor, title):
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_replace_quiz", lang), callback_data="quizsave_replace")],
+            [InlineKeyboardButton(text=t("btn_copy_quiz", lang), callback_data="quizsave_copy")],
+            [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
+        ]
+        await message.answer(
+            t("quiz_duplicate_found", lang, title=title) + "\n\n" + preview_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML"
+        )
+        return
+
+    buttons = [
+        [InlineKeyboardButton(text=t("btn_save_quiz", lang), callback_data="quizsave")],
+        [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
+    ]
+    await message.answer(preview_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+async def save_quiz_from_state(callback: CallbackQuery, state: FSMContext, lang: str, mode: str):
+    data = await state.get_data()
+    parsed = data.get("parsed")
+    title = data.get("title")
+    topic = data.get("topic")
+
+    if not parsed or not title:
+        await state.clear()
+        await callback.answer(t("error", lang))
+        return
+
+    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
+    if not mentor:
+        await state.clear()
+        await callback.answer(t("error", lang))
+        return
+
+    if mode == "replace":
+        await archive_quizzes_by_title(mentor, title)
+    elif mode == "copy":
+        title = await ensure_unique_quiz_title(mentor, title)
+
+    quiz = await create_quiz(mentor, title, topic)
     for i, q in enumerate(parsed["questions"], 1):
         await create_quiz_question(
             quiz=quiz,
@@ -155,10 +287,39 @@ async def receive_quiz_file(message: Message, state: FSMContext, bot: Bot):
         )
 
     await state.clear()
-    await message.answer(
+    await callback.message.edit_text(
         t("quiz_uploaded", lang, title=title, count=len(parsed["questions"])),
-        reply_markup=mentor_menu(lang)
+        parse_mode="HTML"
     )
+    await callback.message.answer(t("quiz_ready_actions", lang), reply_markup=mentor_menu(lang))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "quizsave")
+async def quiz_save(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await save_quiz_from_state(callback, state, lang, mode="save")
+
+
+@router.callback_query(F.data == "quizsave_replace")
+async def quiz_save_replace(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await save_quiz_from_state(callback, state, lang, mode="replace")
+
+
+@router.callback_query(F.data == "quizsave_copy")
+async def quiz_save_copy(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await save_quiz_from_state(callback, state, lang, mode="copy")
+
+
+@router.callback_query(F.data == "quizcancel")
+async def quiz_cancel(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await state.clear()
+    await callback.message.edit_text(t("cancelled", lang))
+    await callback.message.answer(t("quiz_ready_actions", lang), reply_markup=mentor_menu(lang))
+    await callback.answer()
 
 
 # ==================== MENTOR: MANAGE QUIZ ====================
@@ -191,8 +352,11 @@ async def manage_quiz(callback: CallbackQuery):
                  avg=f"{stats['avg']}/{stats['questions']}",
                  top=top_text)
 
+    archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
     buttons = [
-        [InlineKeyboardButton(text=t("btn_delete_quiz", lang), callback_data=f"quizdelete_{quiz_id}")],
+        [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
     ]
 
@@ -205,13 +369,15 @@ async def back_to_quizzes(callback: CallbackQuery):
     lang = await get_user_language(callback.from_user.id)
     if await is_mentor(callback.from_user.id):
         mentor = await get_mentor_by_telegram_id(callback.from_user.id)
-        quizzes = await get_quizzes_by_mentor(mentor)
+        quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
+        stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in quizzes])
 
         buttons = []
         for quiz in quizzes:
-            stats = await get_quiz_stats(quiz)
+            stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+            title = quiz.title if quiz.is_active else f"рџ—„пёЏ {quiz.title}"
             buttons.append([InlineKeyboardButton(
-                text=t("quiz_item_mentor", lang, title=quiz.title, questions=stats['questions'], attempts=stats['attempts']),
+                text=t("quiz_item_mentor", lang, title=title, questions=stats['questions'], attempts=stats['attempts']),
                 callback_data=f"quizmanage_{quiz.id}"
             )])
 
@@ -248,7 +414,7 @@ async def confirm_delete_quiz(callback: CallbackQuery):
     ]
 
     await callback.message.edit_text(
-        t("confirm_delete_quiz", lang, title=quiz.title, count=stats['questions']),
+        t("confirm_archive_quiz", lang, title=quiz.title, count=stats['questions']),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         parse_mode="HTML"
     )
@@ -262,18 +428,20 @@ async def delete_quiz_confirmed(callback: CallbackQuery):
     lang = await get_user_language(callback.from_user.id)
     quiz_id = int(callback.data.replace("quizconfirmdelete_", ""))
 
-    await delete_quiz(quiz_id)
-    await callback.answer(t("quiz_deleted", lang))
+    await set_quiz_active(quiz_id, False)
+    await callback.answer(t("quiz_archived", lang))
 
     # Show updated list
     mentor = await get_mentor_by_telegram_id(callback.from_user.id)
-    quizzes = await get_quizzes_by_mentor(mentor)
+    quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
+    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in quizzes])
 
     buttons = []
     for quiz in quizzes:
-        stats = await get_quiz_stats(quiz)
+        stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+        title = quiz.title if quiz.is_active else f"рџ—„пёЏ {quiz.title}"
         buttons.append([InlineKeyboardButton(
-            text=t("quiz_item_mentor", lang, title=quiz.title, questions=stats['questions'], attempts=stats['attempts']),
+            text=t("quiz_item_mentor", lang, title=title, questions=stats['questions'], attempts=stats['attempts']),
             callback_data=f"quizmanage_{quiz.id}"
         )])
 
@@ -285,6 +453,494 @@ async def delete_quiz_confirmed(callback: CallbackQuery):
         text = t("quiz_mentor_list", lang)
 
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("quiztoggle_"))
+async def toggle_quiz_archive(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    quiz_id = int(callback.data.replace("quiztoggle_", ""))
+    quiz = await get_quiz_by_id(quiz_id)
+
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    new_state = not quiz.is_active
+    await set_quiz_active(quiz_id, new_state)
+    await callback.answer(t("quiz_unarchived", lang) if new_state else t("quiz_archived", lang))
+
+    quiz = await get_quiz_by_id(quiz_id)
+    if quiz:
+        stats = await get_quiz_stats(quiz)
+        top_students = await get_quiz_top_students(quiz)
+
+        if stats['attempts'] == 0:
+            text = t("quiz_no_attempts", lang)
+        else:
+            top_text = ""
+            for i, (student, score, total) in enumerate(top_students, 1):
+                top_text += f"{i}. {student} вЂ” {score}/{total}\n"
+
+            text = t("quiz_results", lang,
+                     title=quiz.title,
+                     attempts=stats['attempts'],
+                     avg=f"{stats['avg']}/{stats['questions']}",
+                     top=top_text)
+
+        archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
+        buttons = [
+            [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz.id}")],
+            [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz.id}")],
+            [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz.id}")],
+            [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
+        ]
+
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+# ==================== MENTOR: MANAGE QUESTIONS ====================
+
+@router.callback_query(F.data.startswith("quizquestions_"))
+async def quiz_questions(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    quiz_id = int(callback.data.replace("quizquestions_", ""))
+    quiz = await get_quiz_by_id(quiz_id)
+
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    questions = await get_questions_by_quiz(quiz)
+    text = t("quiz_questions_title", lang, title=quiz.title, count=len(questions))
+    keyboard = build_questions_keyboard(questions, quiz_id, lang, page=0)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("quizqpage_"))
+async def quiz_questions_page(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    page = int(parts[2])
+
+    quiz = await get_quiz_by_id(quiz_id)
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    questions = await get_questions_by_quiz(quiz)
+    text = t("quiz_questions_title", lang, title=quiz.title, count=len(questions))
+    keyboard = build_questions_keyboard(questions, quiz_id, lang, page=page)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("quizq_"))
+async def quiz_question_detail(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    question_id = int(parts[2])
+
+    question = await get_question_by_id(question_id)
+    if not question:
+        await callback.answer(t("error", lang))
+        return
+
+    text = t(
+        "quiz_question_detail",
+        lang,
+        question=question.question_text,
+        a=question.option_a,
+        b=question.option_b,
+        c=question.option_c,
+        d=question.option_d,
+        correct=question.correct_answer
+    )
+
+    buttons = [
+        [InlineKeyboardButton(text=t("btn_edit_question", lang), callback_data=f"quizqedit_{quiz_id}_{question_id}")],
+        [InlineKeyboardButton(text=t("btn_delete_question", lang), callback_data=f"quizqdel_{quiz_id}_{question_id}")],
+        [InlineKeyboardButton(text=t("btn_back_questions", lang), callback_data=f"quizquestions_{quiz_id}")]
+    ]
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("quizqdel_"))
+async def confirm_delete_question(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    question_id = int(parts[2])
+
+    question = await get_question_by_id(question_id)
+    if not question:
+        await callback.answer(t("error", lang))
+        return
+
+    buttons = [
+        [
+            InlineKeyboardButton(text=t("btn_yes_delete", lang), callback_data=f"quizqdelconfirm_{quiz_id}_{question_id}"),
+            InlineKeyboardButton(text=t("btn_no_cancel", lang), callback_data=f"quizq_{quiz_id}_{question_id}")
+        ]
+    ]
+
+    await callback.message.edit_text(
+        t("confirm_delete_question", lang, text=question.question_text[:80]),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("quizqdelconfirm_"))
+async def delete_question_confirmed(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    question_id = int(parts[2])
+
+    await delete_quiz_question(question_id)
+    await callback.answer(t("question_deleted", lang))
+
+    quiz = await get_quiz_by_id(quiz_id)
+    if not quiz:
+        return
+
+    questions = await get_questions_by_quiz(quiz)
+    text = t("quiz_questions_title", lang, title=quiz.title, count=len(questions))
+    keyboard = build_questions_keyboard(questions, quiz_id, lang, page=0)
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("quizaddq_"))
+async def start_add_question(callback: CallbackQuery, state: FSMContext):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    quiz_id = int(callback.data.replace("quizaddq_", ""))
+    await state.set_state(QuizManageStates.waiting_question_text)
+    await state.update_data(quiz_id=quiz_id)
+    await callback.message.answer(t("enter_question_text", lang), reply_markup=cancel_menu(lang))
+    await callback.answer()
+
+
+@router.message(QuizManageStates.waiting_question_text)
+async def add_question_text(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+    await state.update_data(question_text=message.text.strip())
+    await state.set_state(QuizManageStates.waiting_option_a)
+    await message.answer(t("enter_option_a", lang))
+
+
+@router.message(QuizManageStates.waiting_option_a)
+async def add_option_a(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+    await state.update_data(option_a=message.text.strip())
+    await state.set_state(QuizManageStates.waiting_option_b)
+    await message.answer(t("enter_option_b", lang))
+
+
+@router.message(QuizManageStates.waiting_option_b)
+async def add_option_b(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+    await state.update_data(option_b=message.text.strip())
+    await state.set_state(QuizManageStates.waiting_option_c)
+    await message.answer(t("enter_option_c", lang))
+
+
+@router.message(QuizManageStates.waiting_option_c)
+async def add_option_c(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+    await state.update_data(option_c=message.text.strip())
+    await state.set_state(QuizManageStates.waiting_option_d)
+    await message.answer(t("enter_option_d", lang))
+
+
+@router.message(QuizManageStates.waiting_option_d)
+async def add_option_d(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+    await state.update_data(option_d=message.text.strip())
+    await state.set_state(QuizManageStates.waiting_correct_option)
+    await message.answer(t("enter_correct_option", lang))
+
+
+@router.message(QuizManageStates.waiting_correct_option)
+async def add_correct_option(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+
+    correct = message.text.strip().upper()
+    if correct not in ["A", "B", "C", "D"]:
+        await message.answer(t("invalid_correct_option", lang))
+        return
+
+    data = await state.get_data()
+    quiz_id = data.get("quiz_id")
+    quiz = await get_quiz_by_id(quiz_id)
+    if not quiz:
+        await state.clear()
+        await message.answer(t("error", lang), reply_markup=mentor_menu(lang))
+        return
+
+    order = await get_next_quiz_question_order(quiz)
+    await create_quiz_question(
+        quiz=quiz,
+        question_text=data["question_text"],
+        option_a=data["option_a"],
+        option_b=data["option_b"],
+        option_c=data["option_c"],
+        option_d=data["option_d"],
+        correct_answer=correct,
+        order=order
+    )
+
+    await state.clear()
+    await message.answer(t("question_added", lang), reply_markup=mentor_menu(lang))
+
+
+# ==================== MENTOR: EDIT QUESTION ====================
+
+@router.callback_query(F.data.startswith("quizqedit_"))
+async def start_edit_question(callback: CallbackQuery, state: FSMContext):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    question_id = int(parts[2])
+
+    question = await get_question_by_id(question_id)
+    if not question:
+        await callback.answer(t("error", lang))
+        return
+
+    buttons = [
+        [InlineKeyboardButton(text=t("btn_edit_text", lang), callback_data=f"quizqeditfield_{quiz_id}_{question_id}_text")],
+        [InlineKeyboardButton(text=t("btn_edit_option_a", lang), callback_data=f"quizqeditfield_{quiz_id}_{question_id}_A")],
+        [InlineKeyboardButton(text=t("btn_edit_option_b", lang), callback_data=f"quizqeditfield_{quiz_id}_{question_id}_B")],
+        [InlineKeyboardButton(text=t("btn_edit_option_c", lang), callback_data=f"quizqeditfield_{quiz_id}_{question_id}_C")],
+        [InlineKeyboardButton(text=t("btn_edit_option_d", lang), callback_data=f"quizqeditfield_{quiz_id}_{question_id}_D")],
+        [InlineKeyboardButton(text=t("btn_edit_correct", lang), callback_data=f"quizqeditfield_{quiz_id}_{question_id}_correct")],
+        [InlineKeyboardButton(text=t("btn_back_questions", lang), callback_data=f"quizquestions_{quiz_id}")]
+    ]
+
+    await callback.message.edit_text(
+        t("quiz_edit_prompt", lang),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("quizqeditfield_"))
+async def select_edit_field(callback: CallbackQuery, state: FSMContext):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    quiz_id = int(parts[1])
+    question_id = int(parts[2])
+    field = parts[3]
+
+    await state.set_state(QuizManageStates.waiting_edit_value)
+    await state.update_data(quiz_id=quiz_id, question_id=question_id, edit_field=field)
+
+    prompt_key = {
+        "text": "enter_question_text",
+        "A": "enter_option_a",
+        "B": "enter_option_b",
+        "C": "enter_option_c",
+        "D": "enter_option_d",
+        "correct": "enter_correct_option"
+    }.get(field, "enter_question_text")
+
+    await callback.message.answer(t(prompt_key, lang), reply_markup=cancel_menu(lang))
+    await callback.answer()
+
+
+@router.message(QuizManageStates.waiting_edit_value)
+async def apply_edit_value(message: Message, state: FSMContext):
+    lang = await get_user_language(message.from_user.id)
+    data = await state.get_data()
+    question_id = data.get("question_id")
+    quiz_id = data.get("quiz_id")
+    field = data.get("edit_field")
+
+    if message.text == t("btn_cancel", lang):
+        await state.clear()
+        if question_id and quiz_id:
+            question = await get_question_by_id(question_id)
+            if question:
+                text = t(
+                    "quiz_question_detail",
+                    lang,
+                    question=question.question_text,
+                    a=question.option_a,
+                    b=question.option_b,
+                    c=question.option_c,
+                    d=question.option_d,
+                    correct=question.correct_answer
+                )
+                buttons = [
+                    [InlineKeyboardButton(text=t("btn_edit_question", lang), callback_data=f"quizqedit_{quiz_id}_{question_id}")],
+                    [InlineKeyboardButton(text=t("btn_delete_question", lang), callback_data=f"quizqdel_{quiz_id}_{question_id}")],
+                    [InlineKeyboardButton(text=t("btn_back_questions", lang), callback_data=f"quizquestions_{quiz_id}")]
+                ]
+                await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+                return
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+
+    if not question_id or not field or not quiz_id:
+        await state.clear()
+        await message.answer(t("error", lang), reply_markup=mentor_menu(lang))
+        return
+
+    value = message.text.strip()
+    update_fields = {}
+
+    if field == "text":
+        update_fields["question_text"] = value
+    elif field == "A":
+        update_fields["option_a"] = value
+    elif field == "B":
+        update_fields["option_b"] = value
+    elif field == "C":
+        update_fields["option_c"] = value
+    elif field == "D":
+        update_fields["option_d"] = value
+    elif field == "correct":
+        value = value.upper()
+        if value not in ["A", "B", "C", "D"]:
+            await message.answer(t("invalid_correct_option", lang))
+            return
+        update_fields["correct_answer"] = value
+    else:
+        await state.clear()
+        await message.answer(t("error", lang), reply_markup=mentor_menu(lang))
+        return
+
+    await update_quiz_question(question_id, **update_fields)
+    await state.clear()
+
+    question = await get_question_by_id(question_id)
+    if question:
+        text = t(
+            "quiz_question_detail",
+            lang,
+            question=question.question_text,
+            a=question.option_a,
+            b=question.option_b,
+            c=question.option_c,
+            d=question.option_d,
+            correct=question.correct_answer
+        )
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_edit_question", lang), callback_data=f"quizqedit_{quiz_id}_{question_id}")],
+            [InlineKeyboardButton(text=t("btn_delete_question", lang), callback_data=f"quizqdel_{quiz_id}_{question_id}")],
+            [InlineKeyboardButton(text=t("btn_back_questions", lang), callback_data=f"quizquestions_{quiz_id}")]
+        ]
+        await message.answer(t("question_updated", lang))
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        return
+
+    await message.answer(t("question_updated", lang), reply_markup=mentor_menu(lang))
+
+
+# ==================== MENTOR: EXPORT RESULTS ====================
+
+@router.callback_query(F.data.startswith("quizexport_"))
+async def export_quiz_results(callback: CallbackQuery, bot: Bot):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    quiz_id = int(callback.data.replace("quizexport_", ""))
+    quiz = await get_quiz_by_id(quiz_id)
+
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    attempts = await get_quiz_attempts(quiz)
+    if not attempts:
+        await callback.answer(t("quiz_export_empty", lang))
+        return
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "quiz_title",
+        "student_telegram_id",
+        "username",
+        "first_name",
+        "last_name",
+        "score",
+        "total",
+        "started_at",
+        "finished_at"
+    ])
+
+    for attempt in attempts:
+        student = attempt.student
+        writer.writerow([
+            quiz.title,
+            student.telegram_id,
+            student.username or "",
+            student.first_name or "",
+            student.last_name or "",
+            attempt.score,
+            attempt.total,
+            attempt.started_at.isoformat() if attempt.started_at else "",
+            attempt.finished_at.isoformat() if attempt.finished_at else ""
+        ])
+
+    data = output.getvalue().encode("utf-8")
+    filename = f"quiz_{quiz.id}_results.csv"
+    await bot.send_document(
+        callback.message.chat.id,
+        BufferedInputFile(data, filename=filename),
+        caption=t("quiz_export_ready", lang)
+    )
+    await callback.answer()
 
 
 # ==================== STUDENT: VIEW PREVIOUS ATTEMPT ====================

@@ -190,10 +190,18 @@ def delete_material(material_id: int) -> bool:
 
 @sync_to_async
 def get_materials_count_by_topics(topics) -> dict:
-    result = {}
-    for topic in topics:
-        result[topic.id] = Material.objects.filter(topic=topic).count()
-    return result
+    if not topics:
+        return {}
+
+    from django.db.models import Count
+    topic_ids = [topic.id for topic in topics]
+    counts = (
+        Material.objects
+        .filter(topic_id__in=topic_ids)
+        .values('topic_id')
+        .annotate(count=Count('id'))
+    )
+    return {item['topic_id']: item['count'] for item in counts}
 
 
 # ==================== QUESTIONS ====================
@@ -280,8 +288,11 @@ def create_quiz(mentor, title, topic=None):
 
 
 @sync_to_async
-def get_quizzes_by_mentor(mentor):
-    return list(Quiz.objects.filter(mentor=mentor, is_active=True))
+def get_quizzes_by_mentor(mentor, include_inactive: bool = False):
+    qs = Quiz.objects.filter(mentor=mentor)
+    if not include_inactive:
+        qs = qs.filter(is_active=True)
+    return list(qs)
 
 
 @sync_to_async
@@ -305,6 +316,23 @@ def delete_quiz(quiz_id: int) -> bool:
         return True
     except Quiz.DoesNotExist:
         return False
+
+
+@sync_to_async
+def set_quiz_active(quiz_id: int, is_active: bool) -> bool:
+    updated = Quiz.objects.filter(id=quiz_id).update(is_active=is_active)
+    return updated > 0
+
+
+@sync_to_async
+def archive_quizzes_by_title(mentor, title: str) -> int:
+    """Archive all quizzes for mentor with the same title (case-insensitive)."""
+    return Quiz.objects.filter(mentor=mentor, title__iexact=title).update(is_active=False)
+
+
+@sync_to_async
+def quiz_title_exists(mentor, title: str) -> bool:
+    return Quiz.objects.filter(mentor=mentor, title__iexact=title).exists()
 
 
 @sync_to_async
@@ -335,6 +363,25 @@ def get_question_by_id(question_id: int):
 
 
 @sync_to_async
+def delete_quiz_question(question_id: int) -> bool:
+    deleted, _ = QuizQuestion.objects.filter(id=question_id).delete()
+    return deleted > 0
+
+
+@sync_to_async
+def update_quiz_question(question_id: int, **fields) -> bool:
+    updated = QuizQuestion.objects.filter(id=question_id).update(**fields)
+    return updated > 0
+
+
+@sync_to_async
+def get_next_quiz_question_order(quiz) -> int:
+    from django.db.models import Max
+    result = QuizQuestion.objects.filter(quiz=quiz).aggregate(max_order=Max('order'))
+    return (result['max_order'] or 0) + 1
+
+
+@sync_to_async
 def create_quiz_attempt(student, quiz):
     total = QuizQuestion.objects.filter(quiz=quiz).count()
     return QuizAttempt.objects.create(student=student, quiz=quiz, total=total)
@@ -359,7 +406,7 @@ def get_student_best_attempt(student, quiz):
         quiz=quiz,
         finished_at__isnull=False
     ).order_by('-score')
-    return attempts.first() if attempts.exists() else None
+    return attempts.first()
 
 
 @sync_to_async
@@ -379,7 +426,10 @@ def has_student_attempted(student, quiz) -> bool:
 
 @sync_to_async
 def get_quiz_attempts(quiz):
-    return list(QuizAttempt.objects.filter(quiz=quiz, finished_at__isnull=False))
+    return list(QuizAttempt.objects.filter(
+        quiz=quiz,
+        finished_at__isnull=False
+    ).select_related('student').order_by('finished_at'))
 
 
 @sync_to_async
@@ -394,16 +444,61 @@ def get_quiz_average_score(quiz):
 
 @sync_to_async
 def get_quiz_stats(quiz):
-    from django.db.models import Avg
-    attempts = QuizAttempt.objects.filter(quiz=quiz, finished_at__isnull=False)
-    count = attempts.count()
-    avg = attempts.aggregate(avg_score=Avg('score'))['avg_score'] or 0
-    questions_count = QuizQuestion.objects.filter(quiz=quiz).count()
+    from django.db.models import Avg, Count
+    attempt_stats = QuizAttempt.objects.filter(
+        quiz=quiz,
+        finished_at__isnull=False
+    ).aggregate(
+        attempts=Count('id'),
+        avg_score=Avg('score')
+    )
+    questions_count = QuizQuestion.objects.filter(quiz=quiz).aggregate(
+        questions=Count('id')
+    )['questions']
+    count = attempt_stats['attempts'] or 0
+    avg = attempt_stats['avg_score'] or 0
     return {
         'attempts': count,
         'avg': round(avg, 1),
         'questions': questions_count
     }
+
+
+@sync_to_async
+def get_quiz_stats_by_ids(quiz_ids):
+    """Batch stats for quiz lists to avoid N+1 queries."""
+    if not quiz_ids:
+        return {}
+
+    from django.db.models import Avg, Count
+
+    attempt_rows = QuizAttempt.objects.filter(
+        quiz_id__in=quiz_ids,
+        finished_at__isnull=False
+    ).values('quiz_id').annotate(
+        attempts=Count('id'),
+        avg_score=Avg('score')
+    )
+    question_rows = QuizQuestion.objects.filter(
+        quiz_id__in=quiz_ids
+    ).values('quiz_id').annotate(
+        questions=Count('id')
+    )
+
+    attempt_map = {row['quiz_id']: row for row in attempt_rows}
+    question_map = {row['quiz_id']: row['questions'] for row in question_rows}
+
+    stats = {}
+    for quiz_id in quiz_ids:
+        attempt = attempt_map.get(quiz_id, {})
+        avg = attempt.get('avg_score') or 0
+        stats[quiz_id] = {
+            'attempts': attempt.get('attempts', 0) or 0,
+            'avg': round(avg, 1),
+            'questions': question_map.get(quiz_id, 0) or 0
+        }
+
+    return stats
 
 
 @sync_to_async
