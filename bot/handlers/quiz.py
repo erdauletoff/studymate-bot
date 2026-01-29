@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 QUESTION_TIMEOUT = 20  # seconds per question
 QUESTIONS_PER_PAGE = 5
+ANSWERS_PER_PAGE = 10  # answers per review page
 
 # Store active timers: {attempt_id: (timeout_task, countdown_task)}
 active_timers = {}
@@ -25,6 +26,31 @@ def get_option_text(question, letter: str) -> str:
         'D': question.option_d,
     }
     return options.get(letter.upper(), letter)
+
+
+def build_review_text(answers, page: int, lang: str) -> str:
+    """Build review text for a specific page"""
+    total_pages = (len(answers) + ANSWERS_PER_PAGE - 1) // ANSWERS_PER_PAGE
+    start = page * ANSWERS_PER_PAGE
+    end = min(start + ANSWERS_PER_PAGE, len(answers))
+    page_answers = answers[start:end]
+
+    if total_pages > 1:
+        review_text = t("quiz_review_header_page", lang, page=page + 1, total_pages=total_pages)
+    else:
+        review_text = t("quiz_review_header", lang)
+
+    for answer in page_answers:
+        q = answer.question
+        q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
+        selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
+        if answer.is_correct:
+            review_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
+        else:
+            correct_text = get_option_text(q, q.correct_answer)
+            review_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
+
+    return review_text, total_pages
 from bot.texts import t
 from bot.db import (
     is_mentor, get_mentor_by_telegram_id, get_student_by_telegram_id,
@@ -36,7 +62,7 @@ from bot.db import (
     get_quiz_stats, get_quiz_stats_by_ids, get_quiz_top_students, save_quiz_answer,
     get_attempt_by_id, get_attempt_answers, set_quiz_active,
     delete_quiz_question, get_next_quiz_question_order, update_quiz_question,
-    archive_quizzes_by_title, quiz_title_exists
+    archive_quizzes_by_title, quiz_title_exists, delete_quiz_attempts, shuffle_quiz_questions
 )
 from bot.utils.quiz_parser import parse_quiz_file
 
@@ -355,6 +381,7 @@ async def manage_quiz(callback: CallbackQuery):
     archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
     buttons = [
         [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_restart_quiz", lang), callback_data=f"quizrestart_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
@@ -492,12 +519,89 @@ async def toggle_quiz_archive(callback: CallbackQuery):
         archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
         buttons = [
             [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz.id}")],
+            [InlineKeyboardButton(text=t("btn_restart_quiz", lang), callback_data=f"quizrestart_{quiz.id}")],
             [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz.id}")],
             [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz.id}")],
             [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
         ]
 
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+@router.callback_query(F.data.startswith("quizrestart_"))
+async def confirm_restart_quiz(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    quiz_id = int(callback.data.replace("quizrestart_", ""))
+    quiz = await get_quiz_by_id(quiz_id)
+
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    buttons = [
+        [
+            InlineKeyboardButton(text=t("btn_yes_delete", lang), callback_data=f"quizconfirmrestart_{quiz_id}"),
+            InlineKeyboardButton(text=t("btn_no_cancel", lang), callback_data=f"quizmanage_{quiz_id}")
+        ]
+    ]
+
+    await callback.message.edit_text(
+        t("confirm_restart_quiz", lang, title=quiz.title),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("quizconfirmrestart_"))
+async def restart_quiz_confirmed(callback: CallbackQuery):
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    quiz_id = int(callback.data.replace("quizconfirmrestart_", ""))
+    quiz = await get_quiz_by_id(quiz_id)
+
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    # Delete all attempts
+    await delete_quiz_attempts(quiz)
+
+    # Shuffle questions
+    await shuffle_quiz_questions(quiz)
+
+    await callback.answer(t("quiz_restarted", lang))
+
+    # Show updated quiz management screen
+    stats = await get_quiz_stats(quiz)
+    top_students = await get_quiz_top_students(quiz)
+
+    if stats['attempts'] == 0:
+        text = t("quiz_no_attempts", lang)
+    else:
+        top_text = ""
+        for i, (student, score, total) in enumerate(top_students, 1):
+            top_text += f"{i}. {student} — {score}/{total}\n"
+
+        text = t("quiz_results", lang,
+                 title=quiz.title,
+                 attempts=stats['attempts'],
+                 avg=f"{stats['avg']}/{stats['questions']}",
+                 top=top_text)
+
+    archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
+    buttons = [
+        [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_restart_quiz", lang), callback_data=f"quizrestart_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz_id}")],
+        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
+    ]
+
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 
 # ==================== MENTOR: MANAGE QUESTIONS ====================
@@ -973,33 +1077,44 @@ async def view_quiz_attempt(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "noop")
+async def noop_handler(callback: CallbackQuery):
+    """Handle no-operation callbacks (like page number display)"""
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("reviewquiz_"))
 async def review_quiz_answers(callback: CallbackQuery):
     lang = await get_user_language(callback.from_user.id)
-    attempt_id = int(callback.data.replace("reviewquiz_", ""))
+    parts = callback.data.split("_")
+    attempt_id = int(parts[1])
+    page = int(parts[2]) if len(parts) > 2 else 0
+
     attempt = await get_attempt_by_id(attempt_id)
 
     if not attempt:
         await callback.answer(t("error", lang))
         return
 
-    # Build review text
+    # Build review text for current page
     answers = await get_attempt_answers(attempt)
-    review_text = t("quiz_review_header", lang)
-
-    for answer in answers:
-        q = answer.question
-        q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
-        selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
-        if answer.is_correct:
-            review_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
-        else:
-            correct_text = get_option_text(q, q.correct_answer)
-            review_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
+    review_text, total_pages = build_review_text(answers, page, lang)
 
     text = t("quiz_your_result", lang, score=attempt.score, total=attempt.total) + review_text
 
-    buttons = [[InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"viewquiz_{attempt.quiz_id}")]]
+    # Build pagination buttons
+    buttons = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=t("btn_prev", lang), callback_data=f"reviewquiz_{attempt_id}_{page - 1}"))
+    if total_pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"reviewquiz_{attempt_id}_{page + 1}"))
+    if nav:
+        buttons.append(nav)
+
+    buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"viewquiz_{attempt.quiz_id}")])
 
     await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     await callback.answer()
@@ -1192,23 +1307,24 @@ async def question_timeout(message, attempt_id: int, question_id: int, current: 
                     countdown_task.cancel()
                 del active_timers[attempt_id]
 
-            # Build result with review
+            # Build result with review (first page)
             result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")
 
             answers = await get_attempt_answers(attempt)
-            result_text += t("quiz_review_header", lang)
+            review_text, total_pages = build_review_text(answers, 0, lang)
+            result_text += review_text
 
-            for answer in answers:
-                q = answer.question
-                q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
-                selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
-                if answer.is_correct:
-                    result_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
-                else:
-                    correct_text = get_option_text(q, q.correct_answer)
-                    result_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
-
-            await message.edit_text(result_text, parse_mode="HTML")
+            # Add pagination buttons if needed
+            buttons = []
+            if total_pages > 1:
+                nav = [
+                    InlineKeyboardButton(text=f"1/{total_pages}", callback_data="noop"),
+                    InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"reviewquiz_{attempt_id}_1")
+                ]
+                buttons.append(nav)
+                await message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+            else:
+                await message.edit_text(result_text, parse_mode="HTML")
         else:
             # Show next question
             await state.update_data(current_index=current_index, score=score)
@@ -1283,24 +1399,25 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
 
         await state.clear()
 
-        # Build result with review
+        # Build result with review (first page)
         result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")
 
         # Add review
         answers = await get_attempt_answers(attempt)
-        result_text += t("quiz_review_header", lang)
+        review_text, total_pages = build_review_text(answers, 0, lang)
+        result_text += review_text
 
-        for answer in answers:
-            q = answer.question
-            q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
-            selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
-            if answer.is_correct:
-                result_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
-            else:
-                correct_text = get_option_text(q, q.correct_answer)
-                result_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
-
-        await callback.message.edit_text(result_text, parse_mode="HTML")
+        # Add pagination buttons if needed
+        buttons = []
+        if total_pages > 1:
+            nav = [
+                InlineKeyboardButton(text=f"1/{total_pages}", callback_data="noop"),
+                InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"reviewquiz_{attempt_id}_1")
+            ]
+            buttons.append(nav)
+            await callback.message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        else:
+            await callback.message.edit_text(result_text, parse_mode="HTML")
     else:
         # Show next question
         await state.update_data(current_index=current_index, score=score)

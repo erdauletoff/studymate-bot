@@ -533,3 +533,22 @@ def get_attempt_by_id(attempt_id: int):
 def get_attempt_answers(attempt):
     """Get all answers for an attempt with questions for review"""
     return list(QuizAnswer.objects.filter(attempt=attempt).select_related('question').order_by('question__order'))
+
+
+@sync_to_async
+def delete_quiz_attempts(quiz):
+    """Delete all attempts for a quiz (for restart)"""
+    deleted_count = QuizAttempt.objects.filter(quiz=quiz).delete()[0]
+    return deleted_count
+
+
+@sync_to_async
+def shuffle_quiz_questions(quiz):
+    """Randomly shuffle the order of quiz questions"""
+    import random
+    questions = list(QuizQuestion.objects.filter(quiz=quiz))
+    random.shuffle(questions)
+    for i, question in enumerate(questions, 1):
+        question.order = i
+        question.save()
+    return len(questions)
