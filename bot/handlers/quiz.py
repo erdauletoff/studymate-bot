@@ -1,5 +1,6 @@
 import asyncio
 import csv
+import html
 import io
 import time
 from aiogram import Router, F, Bot
@@ -10,11 +11,19 @@ from aiogram.fsm.state import State, StatesGroup
 QUESTION_TIMEOUT = 20  # seconds per question
 QUESTIONS_PER_PAGE = 5
 ANSWERS_PER_PAGE = 10  # answers per review page
+QUIZ_SESSION_TIMEOUT = 420  # 7 minutes - auto-reset quiz state
 
 # Store active timers: {attempt_id: (timeout_task, countdown_task)}
 active_timers = {}
+# Store quiz session timers: {attempt_id: session_timeout_task}
+session_timers = {}
 
 from bot.keyboards import mentor_menu, student_menu, cancel_menu
+
+
+def escape_html(text: str) -> str:
+    """Escape HTML special characters to prevent parsing errors"""
+    return html.escape(text)
 
 
 def get_option_text(question, letter: str) -> str:
@@ -43,12 +52,12 @@ def build_review_text(answers, page: int, lang: str) -> str:
     for answer in page_answers:
         q = answer.question
         q_text = q.question_text[:50] + "..." if len(q.question_text) > 50 else q.question_text
-        selected_text = get_option_text(q, answer.selected_answer) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
+        selected_text = escape_html(get_option_text(q, answer.selected_answer)) if answer.selected_answer != "-" else t("quiz_time_expired", lang)
         if answer.is_correct:
-            review_text += t("quiz_review_correct", lang, num=q.order, question=q_text, answer=selected_text)
+            review_text += t("quiz_review_correct", lang, num=q.order, question=escape_html(q_text), answer=selected_text)
         else:
-            correct_text = get_option_text(q, q.correct_answer)
-            review_text += t("quiz_review_wrong", lang, num=q.order, question=q_text, answer=selected_text, correct=correct_text)
+            correct_text = escape_html(get_option_text(q, q.correct_answer))
+            review_text += t("quiz_review_wrong", lang, num=q.order, question=escape_html(q_text), answer=selected_text, correct=correct_text)
 
     return review_text, total_pages
 from bot.texts import t
@@ -58,11 +67,11 @@ from bot.db import (
     create_quiz, get_quizzes_by_mentor, get_active_quizzes_by_mentor, get_quiz_by_id,
     create_quiz_question, get_questions_by_quiz, get_question_by_id,
     create_quiz_attempt, finish_quiz_attempt, get_student_attempt,
-    has_student_attempted, get_quiz_attempts, get_quiz_average_score,
+    get_quiz_attempts, get_quiz_average_score,
     get_quiz_stats, get_quiz_stats_by_ids, get_quiz_top_students, save_quiz_answer,
     get_attempt_by_id, get_attempt_answers, set_quiz_active,
     delete_quiz_question, get_next_quiz_question_order, update_quiz_question,
-    archive_quizzes_by_title, quiz_title_exists, delete_quiz_attempts, shuffle_quiz_questions
+    archive_quizzes_by_title, quiz_title_exists
 )
 from bot.utils.quiz_parser import parse_quiz_file
 
@@ -93,6 +102,7 @@ def build_questions_keyboard(questions, quiz_id: int, lang: str, page: int = 0) 
 
     buttons = []
     for i, q in enumerate(page_questions, start=start + 1):
+        # No need to escape here - this is for button text, not HTML parsing
         preview = q.question_text[:40] + ("..." if len(q.question_text) > 40 else "")
         buttons.append([InlineKeyboardButton(
             text=f"{i}. {preview}",
@@ -124,17 +134,17 @@ def build_quiz_preview_text(parsed: dict, title: str, lang: str) -> str:
         preview = t(
             "quiz_preview_question",
             lang,
-            text=q["text"],
-            a=q["option_a"],
-            b=q["option_b"],
-            c=q["option_c"],
-            d=q["option_d"]
+            text=escape_html(q["text"]),
+            a=escape_html(q["option_a"]),
+            b=escape_html(q["option_b"]),
+            c=escape_html(q["option_c"]),
+            d=escape_html(q["option_d"])
         )
     return t(
         "quiz_preview",
         lang,
-        title=title,
-        topic=topic or "-",
+        title=escape_html(title),
+        topic=escape_html(topic) if topic else "-",
         count=count,
         preview=preview
     )
@@ -207,7 +217,7 @@ async def show_student_quizzes(message: Message, mentor, lang: str):
     for quiz in quizzes:
         attempt = await get_student_attempt(student, quiz)
         if attempt and attempt.finished_at:
-            # Already completed - show score
+            # Already completed - show score and allow retake
             text = f"✅ {quiz.title} — {attempt.score}/{attempt.total}"
             callback = f"viewquiz_{quiz.id}"
         else:
@@ -381,7 +391,6 @@ async def manage_quiz(callback: CallbackQuery):
     archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
     buttons = [
         [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz_id}")],
-        [InlineKeyboardButton(text=t("btn_restart_quiz", lang), callback_data=f"quizrestart_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz_id}")],
         [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
@@ -519,89 +528,12 @@ async def toggle_quiz_archive(callback: CallbackQuery):
         archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
         buttons = [
             [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz.id}")],
-            [InlineKeyboardButton(text=t("btn_restart_quiz", lang), callback_data=f"quizrestart_{quiz.id}")],
             [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz.id}")],
             [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz.id}")],
             [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
         ]
 
         await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
-
-
-@router.callback_query(F.data.startswith("quizrestart_"))
-async def confirm_restart_quiz(callback: CallbackQuery):
-    if not await is_mentor(callback.from_user.id):
-        return
-    lang = await get_user_language(callback.from_user.id)
-    quiz_id = int(callback.data.replace("quizrestart_", ""))
-    quiz = await get_quiz_by_id(quiz_id)
-
-    if not quiz:
-        await callback.answer(t("error", lang))
-        return
-
-    buttons = [
-        [
-            InlineKeyboardButton(text=t("btn_yes_delete", lang), callback_data=f"quizconfirmrestart_{quiz_id}"),
-            InlineKeyboardButton(text=t("btn_no_cancel", lang), callback_data=f"quizmanage_{quiz_id}")
-        ]
-    ]
-
-    await callback.message.edit_text(
-        t("confirm_restart_quiz", lang, title=quiz.title),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        parse_mode="HTML"
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("quizconfirmrestart_"))
-async def restart_quiz_confirmed(callback: CallbackQuery):
-    if not await is_mentor(callback.from_user.id):
-        return
-    lang = await get_user_language(callback.from_user.id)
-    quiz_id = int(callback.data.replace("quizconfirmrestart_", ""))
-    quiz = await get_quiz_by_id(quiz_id)
-
-    if not quiz:
-        await callback.answer(t("error", lang))
-        return
-
-    # Delete all attempts
-    await delete_quiz_attempts(quiz)
-
-    # Shuffle questions
-    await shuffle_quiz_questions(quiz)
-
-    await callback.answer(t("quiz_restarted", lang))
-
-    # Show updated quiz management screen
-    stats = await get_quiz_stats(quiz)
-    top_students = await get_quiz_top_students(quiz)
-
-    if stats['attempts'] == 0:
-        text = t("quiz_no_attempts", lang)
-    else:
-        top_text = ""
-        for i, (student, score, total) in enumerate(top_students, 1):
-            top_text += f"{i}. {student} — {score}/{total}\n"
-
-        text = t("quiz_results", lang,
-                 title=quiz.title,
-                 attempts=stats['attempts'],
-                 avg=f"{stats['avg']}/{stats['questions']}",
-                 top=top_text)
-
-    archive_text = t("btn_unarchive_quiz", lang) if not quiz.is_active else t("btn_archive_quiz", lang)
-    buttons = [
-        [InlineKeyboardButton(text=archive_text, callback_data=f"quiztoggle_{quiz_id}")],
-        [InlineKeyboardButton(text=t("btn_restart_quiz", lang), callback_data=f"quizrestart_{quiz_id}")],
-        [InlineKeyboardButton(text=t("btn_manage_questions", lang), callback_data=f"quizquestions_{quiz_id}")],
-        [InlineKeyboardButton(text=t("btn_export_results", lang), callback_data=f"quizexport_{quiz_id}")],
-        [InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_quizzes")]
-    ]
-
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 
 # ==================== MENTOR: MANAGE QUESTIONS ====================
@@ -663,11 +595,11 @@ async def quiz_question_detail(callback: CallbackQuery):
     text = t(
         "quiz_question_detail",
         lang,
-        question=question.question_text,
-        a=question.option_a,
-        b=question.option_b,
-        c=question.option_c,
-        d=question.option_d,
+        question=escape_html(question.question_text),
+        a=escape_html(question.option_a),
+        b=escape_html(question.option_b),
+        c=escape_html(question.option_c),
+        d=escape_html(question.option_d),
         correct=question.correct_answer
     )
 
@@ -703,7 +635,7 @@ async def confirm_delete_question(callback: CallbackQuery):
     ]
 
     await callback.message.edit_text(
-        t("confirm_delete_question", lang, text=question.question_text[:80]),
+        t("confirm_delete_question", lang, text=escape_html(question.question_text[:80])),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
         parse_mode="HTML"
     )
@@ -917,11 +849,11 @@ async def apply_edit_value(message: Message, state: FSMContext):
                 text = t(
                     "quiz_question_detail",
                     lang,
-                    question=question.question_text,
-                    a=question.option_a,
-                    b=question.option_b,
-                    c=question.option_c,
-                    d=question.option_d,
+                    question=escape_html(question.question_text),
+                    a=escape_html(question.option_a),
+                    b=escape_html(question.option_b),
+                    c=escape_html(question.option_c),
+                    d=escape_html(question.option_d),
                     correct=question.correct_answer
                 )
                 buttons = [
@@ -971,11 +903,11 @@ async def apply_edit_value(message: Message, state: FSMContext):
         text = t(
             "quiz_question_detail",
             lang,
-            question=question.question_text,
-            a=question.option_a,
-            b=question.option_b,
-            c=question.option_c,
-            d=question.option_d,
+            question=escape_html(question.question_text),
+            a=escape_html(question.option_a),
+            b=escape_html(question.option_b),
+            c=escape_html(question.option_c),
+            d=escape_html(question.option_d),
             correct=question.correct_answer
         )
         buttons = [
@@ -1066,8 +998,11 @@ async def view_quiz_attempt(callback: CallbackQuery):
         await callback.answer(t("error", lang))
         return
 
-    # Show already taken message with view answers button
-    buttons = [[InlineKeyboardButton(text=t("quiz_view_answers", lang), callback_data=f"reviewquiz_{attempt.id}")]]
+    # Show result with options to view answers or retake quiz
+    buttons = [
+        [InlineKeyboardButton(text=t("quiz_view_answers", lang), callback_data=f"reviewquiz_{attempt.id}")],
+        [InlineKeyboardButton(text=t("quiz_retake", lang), callback_data=f"startquiz_{quiz_id}")]
+    ]
 
     await callback.message.edit_text(
         t("quiz_already_taken", lang, score=attempt.score, total=attempt.total),
@@ -1137,19 +1072,7 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer(t("error", lang))
         return
 
-    # Check if already attempted
-    if await has_student_attempted(student, quiz):
-        attempt = await get_student_attempt(student, quiz)
-        buttons = [[InlineKeyboardButton(text=t("quiz_view_answers", lang), callback_data=f"reviewquiz_{attempt.id}")]]
-        await callback.message.edit_text(
-            t("quiz_already_taken", lang, score=attempt.score, total=attempt.total),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-            parse_mode="HTML"
-        )
-        await callback.answer()
-        return
-
-    # Create attempt
+    # Create new attempt (allow multiple attempts)
     attempt = await create_quiz_attempt(student, quiz)
     questions = await get_questions_by_quiz(quiz)
 
@@ -1167,6 +1090,10 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
         score=0
     )
 
+    # Start session timeout timer (7 minutes)
+    session_task = asyncio.create_task(quiz_session_timeout(attempt.id, state, bot))
+    session_timers[attempt.id] = session_task
+
     # Show first question
     await show_question(callback.message, questions[0], 1, len(questions), lang, attempt.id, state, bot, edit=True)
     await callback.answer()
@@ -1175,11 +1102,11 @@ async def show_question(message, question, current: int, total: int, lang: str, 
     base_text = t("quiz_question", lang,
              current=current,
              total=total,
-             text=question.question_text,
-             a=question.option_a,
-             b=question.option_b,
-             c=question.option_c,
-             d=question.option_d)
+             text=escape_html(question.question_text),
+             a=escape_html(question.option_a),
+             b=escape_html(question.option_b),
+             c=escape_html(question.option_c),
+             d=escape_html(question.option_d))
 
     buttons = [[
         InlineKeyboardButton(text="A", callback_data=f"ans_{attempt_id}_{question.id}_A"),
@@ -1254,6 +1181,44 @@ async def update_countdown(message, base_text: str, buttons: list, end_time: flo
         pass  # Timer was cancelled
 
 
+async def quiz_session_timeout(attempt_id: int, state: FSMContext, bot: Bot):
+    """Auto-reset quiz state after QUIZ_SESSION_TIMEOUT seconds"""
+    try:
+        await asyncio.sleep(QUIZ_SESSION_TIMEOUT)
+
+        # Check if still in quiz
+        data = await state.get_data()
+        if data.get("attempt_id") != attempt_id:
+            return
+
+        # Cancel question timers
+        if attempt_id in active_timers:
+            timeout_task, countdown_task = active_timers[attempt_id]
+            if timeout_task:
+                timeout_task.cancel()
+            if countdown_task:
+                countdown_task.cancel()
+            del active_timers[attempt_id]
+
+        # Unpin quiz message
+        pinned_chat_id = data.get("pinned_chat_id")
+        if pinned_chat_id:
+            try:
+                await bot.unpin_chat_message(chat_id=pinned_chat_id)
+            except Exception:
+                pass
+
+        # Clear state
+        await state.clear()
+
+        # Remove session timer
+        if attempt_id in session_timers:
+            del session_timers[attempt_id]
+
+    except asyncio.CancelledError:
+        pass  # Session timer was cancelled
+
+
 async def question_timeout(message, attempt_id: int, question_id: int, current: int, total: int, lang: str, state: FSMContext, end_time: float, bot: Bot):
     """Handle question timeout - auto-skip to next question"""
     try:
@@ -1306,6 +1271,11 @@ async def question_timeout(message, attempt_id: int, question_id: int, current: 
                 if countdown_task:
                     countdown_task.cancel()
                 del active_timers[attempt_id]
+
+            # Remove session timer
+            if attempt_id in session_timers:
+                session_timers[attempt_id].cancel()
+                del session_timers[attempt_id]
 
             # Build result with review (first page)
             result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")
@@ -1398,6 +1368,11 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
                 pass  # Unpin might fail
 
         await state.clear()
+
+        # Remove session timer
+        if attempt_id in session_timers:
+            session_timers[attempt_id].cancel()
+            del session_timers[attempt_id]
 
         # Build result with review (first page)
         result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")

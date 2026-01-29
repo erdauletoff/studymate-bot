@@ -411,9 +411,18 @@ def get_student_best_attempt(student, quiz):
 
 @sync_to_async
 def get_student_attempt(student, quiz):
-    """Get student's attempt for a quiz (only one attempt allowed)"""
+    """Get student's latest attempt for a quiz"""
     try:
-        return QuizAttempt.objects.get(student=student, quiz=quiz)
+        return QuizAttempt.objects.filter(student=student, quiz=quiz).order_by('-started_at').first()
+    except QuizAttempt.DoesNotExist:
+        return None
+
+
+@sync_to_async
+def get_student_first_attempt(student, quiz):
+    """Get student's first attempt for a quiz (used for statistics)"""
+    try:
+        return QuizAttempt.objects.filter(student=student, quiz=quiz, finished_at__isnull=False).order_by('started_at').first()
     except QuizAttempt.DoesNotExist:
         return None
 
@@ -426,6 +435,7 @@ def has_student_attempted(student, quiz) -> bool:
 
 @sync_to_async
 def get_quiz_attempts(quiz):
+    """Get all attempts for export (includes all attempts, not just first)"""
     return list(QuizAttempt.objects.filter(
         quiz=quiz,
         finished_at__isnull=False
@@ -434,29 +444,78 @@ def get_quiz_attempts(quiz):
 
 @sync_to_async
 def get_quiz_average_score(quiz):
-    from django.db.models import Avg
-    result = QuizAttempt.objects.filter(
+    """Get average score from first attempts only"""
+    from django.db.models import Avg, Min
+    # Get IDs of first attempts for each student
+    first_attempts = QuizAttempt.objects.filter(
         quiz=quiz,
         finished_at__isnull=False
+    ).values('student_id').annotate(
+        first_started=Min('started_at')
+    )
+
+    # Calculate average from first attempts only
+    first_attempt_ids = []
+    for fa in first_attempts:
+        attempt = QuizAttempt.objects.filter(
+            quiz=quiz,
+            student_id=fa['student_id'],
+            started_at=fa['first_started']
+        ).first()
+        if attempt:
+            first_attempt_ids.append(attempt.id)
+
+    if not first_attempt_ids:
+        return 0
+
+    result = QuizAttempt.objects.filter(
+        id__in=first_attempt_ids
     ).aggregate(avg_score=Avg('score'))
     return result['avg_score'] or 0
 
 
 @sync_to_async
 def get_quiz_stats(quiz):
-    from django.db.models import Avg, Count
-    attempt_stats = QuizAttempt.objects.filter(
+    """Get quiz statistics based on first attempts only"""
+    from django.db.models import Avg, Count, Min
+
+    # Get first attempts for each student
+    first_attempts = QuizAttempt.objects.filter(
         quiz=quiz,
         finished_at__isnull=False
-    ).aggregate(
-        attempts=Count('id'),
-        avg_score=Avg('score')
+    ).values('student_id').annotate(
+        first_started=Min('started_at')
     )
+
+    # Get IDs of first attempts
+    first_attempt_ids = []
+    for fa in first_attempts:
+        attempt = QuizAttempt.objects.filter(
+            quiz=quiz,
+            student_id=fa['student_id'],
+            started_at=fa['first_started']
+        ).first()
+        if attempt:
+            first_attempt_ids.append(attempt.id)
+
+    # Calculate stats from first attempts only
+    if first_attempt_ids:
+        attempt_stats = QuizAttempt.objects.filter(
+            id__in=first_attempt_ids
+        ).aggregate(
+            attempts=Count('id'),
+            avg_score=Avg('score')
+        )
+        count = attempt_stats['attempts'] or 0
+        avg = attempt_stats['avg_score'] or 0
+    else:
+        count = 0
+        avg = 0
+
     questions_count = QuizQuestion.objects.filter(quiz=quiz).aggregate(
         questions=Count('id')
     )['questions']
-    count = attempt_stats['attempts'] or 0
-    avg = attempt_stats['avg_score'] or 0
+
     return {
         'attempts': count,
         'avg': round(avg, 1),
@@ -466,19 +525,39 @@ def get_quiz_stats(quiz):
 
 @sync_to_async
 def get_quiz_stats_by_ids(quiz_ids):
-    """Batch stats for quiz lists to avoid N+1 queries."""
+    """Batch stats for quiz lists (based on first attempts only)."""
     if not quiz_ids:
         return {}
 
-    from django.db.models import Avg, Count
+    from django.db.models import Avg, Count, Min
 
-    attempt_rows = QuizAttempt.objects.filter(
+    # Get first attempts for each student in each quiz
+    first_attempts_data = QuizAttempt.objects.filter(
         quiz_id__in=quiz_ids,
         finished_at__isnull=False
+    ).values('quiz_id', 'student_id').annotate(
+        first_started=Min('started_at')
+    )
+
+    # Get IDs of first attempts
+    first_attempt_ids = []
+    for fa in first_attempts_data:
+        attempt = QuizAttempt.objects.filter(
+            quiz_id=fa['quiz_id'],
+            student_id=fa['student_id'],
+            started_at=fa['first_started']
+        ).first()
+        if attempt:
+            first_attempt_ids.append(attempt.id)
+
+    # Calculate stats from first attempts only
+    attempt_rows = QuizAttempt.objects.filter(
+        id__in=first_attempt_ids
     ).values('quiz_id').annotate(
         attempts=Count('id'),
         avg_score=Avg('score')
     )
+
     question_rows = QuizQuestion.objects.filter(
         quiz_id__in=quiz_ids
     ).values('quiz_id').annotate(
@@ -503,11 +582,32 @@ def get_quiz_stats_by_ids(quiz_ids):
 
 @sync_to_async
 def get_quiz_top_students(quiz, limit=5):
-    attempts = QuizAttempt.objects.filter(
+    """Get top students based on first attempts only"""
+    from django.db.models import Min
+
+    # Get first attempts for each student
+    first_attempts_data = QuizAttempt.objects.filter(
         quiz=quiz,
         finished_at__isnull=False
-    ).select_related('student').order_by('-score', 'finished_at')[:limit]
-    return [(a.student, a.score, a.total) for a in attempts]
+    ).values('student_id').annotate(
+        first_started=Min('started_at')
+    )
+
+    # Get first attempts
+    first_attempts = []
+    for fa in first_attempts_data:
+        attempt = QuizAttempt.objects.filter(
+            quiz=quiz,
+            student_id=fa['student_id'],
+            started_at=fa['first_started']
+        ).select_related('student').first()
+        if attempt:
+            first_attempts.append(attempt)
+
+    # Sort by score descending, then by time
+    first_attempts.sort(key=lambda a: (-a.score, a.finished_at))
+
+    return [(a.student, a.score, a.total) for a in first_attempts[:limit]]
 
 
 @sync_to_async

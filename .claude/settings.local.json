@@ -8,7 +8,13 @@
       "Bash(python -c \"from bot.handlers import quiz; print\\(''Quiz handler imported successfully''\\)\")",
       "Bash(python -c:*)",
       "Bash(python -m py_compile:*)",
-      "Bash(python manage.py check:*)"
+      "Bash(python manage.py check:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(heroku:*)",
+      "Bash(ping:*)",
+      "Bash(dir:*)"
     ]
   }
 }
