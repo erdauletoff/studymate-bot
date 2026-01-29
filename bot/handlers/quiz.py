@@ -1417,6 +1417,18 @@ def get_animal_name(lang: str, index: int) -> str:
     return t(animal_key, lang)
 
 
+def get_medal_emoji(rank: int) -> str:
+    """Get medal emoji for top 3"""
+    if rank == 1:
+        return "🥇"
+    elif rank == 2:
+        return "🥈"
+    elif rank == 3:
+        return "🥉"
+    else:
+        return f"{rank}."
+
+
 @router.message(F.text.in_(["🏆 Рейтинг", "🏆 Reyting", "🏆 Leaderboard"]))
 async def show_leaderboard(message: Message):
     lang = await get_user_language(message.from_user.id)
@@ -1437,8 +1449,8 @@ async def show_leaderboard(message: Message):
         await message.answer(t("not_assigned", lang))
         return
 
-    # Get leaderboard data
-    leaderboard = await get_global_leaderboard(mentor, limit=10)
+    # Get leaderboard data (top 15)
+    leaderboard = await get_global_leaderboard(mentor, limit=15)
 
     if not leaderboard:
         await message.answer(t("leaderboard_empty", lang))
@@ -1451,18 +1463,24 @@ async def show_leaderboard(message: Message):
     text = t("leaderboard_title", lang)
 
     for rank, (lb_student, rating_score, avg_percentage, total_quizzes) in enumerate(leaderboard, 1):
+        medal = get_medal_emoji(rank)
+
         if lb_student.id == student.id:
             # Show student's own name
-            text += t("leaderboard_you", lang, rank=rank, score=rating_score, percentage=avg_percentage, quizzes=total_quizzes)
+            text += t("leaderboard_you", lang, medal=medal, score=rating_score)
         else:
             # Show animal name for other students
             animal_name = get_animal_name(lang, rank - 1)
-            text += t("leaderboard_entry", lang, rank=rank, name=animal_name, score=rating_score, percentage=avg_percentage, quizzes=total_quizzes)
+            text += t("leaderboard_entry", lang, medal=medal, name=animal_name, score=rating_score)
 
-    # Add student's rank if not in top 10
-    if student_rank_data and student_rank_data[0] > 10:
+        # Add separator after top 3
+        if rank == 3:
+            text += t("leaderboard_separator_top3", lang)
+
+    # Add student's rank if not in top 15
+    if student_rank_data and student_rank_data[0] > 15:
         rank, rating_score, avg_percentage, total_quizzes = student_rank_data
-        text += t("leaderboard_your_rank", lang, rank=rank, score=rating_score, percentage=avg_percentage, quizzes=total_quizzes)
+        text += t("leaderboard_your_rank", lang, rank=rank, score=rating_score)
 
     text += t("leaderboard_footer", lang)
 

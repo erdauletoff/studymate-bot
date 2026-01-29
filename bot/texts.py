@@ -168,12 +168,13 @@ TEXTS = {
 
         # ===== LEADERBOARD =====
         "btn_leaderboard": "🏆 Рейтинг",
-        "leaderboard_title": "🏆 <b>Топ-10 учеников</b>\n\n",
-        "leaderboard_entry": "{rank}. {name} — {score} балл. ({percentage}%, {quizzes} квиз.)\n",
-        "leaderboard_you": "{rank}. <b>ВЫ</b> — {score} балл. ({percentage}%, {quizzes} квиз.)\n",
+        "leaderboard_title": "🏆 <b>Рейтинг учеников</b>\n\n",
+        "leaderboard_entry": "{medal} {name} — <code>{score}</code>\n",
+        "leaderboard_you": "{medal} <b>ВЫ</b> — <code>{score}</code>\n",
         "leaderboard_footer": "",
         "leaderboard_empty": "📭 Рейтинг пуст. Пройдите квизы чтобы попасть в топ!",
-        "leaderboard_your_rank": "\n\n📍 Ваша позиция: #{rank} — {score} балл. ({percentage}%, {quizzes} квиз.)",
+        "leaderboard_your_rank": "\n<b>━━━━━━━━━━━━━━━</b>\n📍 <b>Ваша позиция:</b> #{rank}\n💯 <b>Балл:</b> <code>{score}</code>",
+        "leaderboard_separator_top3": "\n<b>━━━━━━━━━━━━━━━</b>\n",
         "leaderboard_mentor_title": "🏆 <b>Рейтинг учеников (Топ-20)</b>\n\n",
         "leaderboard_mentor_entry": "{rank}. {name} — {score} балл.\n   📊 {percentage}% среднее • {quizzes} квиз.\n",
 
@@ -364,12 +365,13 @@ TEXTS = {
 
         # ===== LEADERBOARD =====
         "btn_leaderboard": "🏆 Reyting",
-        "leaderboard_title": "🏆 <b>Top-10 oqıwshılar</b>\n\n",
-        "leaderboard_entry": "{rank}. {name} — {score} ball ({percentage}%, {quizzes} kviz)\n",
-        "leaderboard_you": "{rank}. <b>SIZ</b> — {score} ball ({percentage}%, {quizzes} kviz)\n",
+        "leaderboard_title": "🏆 <b>Oqıwshılar reytingi</b>\n\n",
+        "leaderboard_entry": "{medal} {name} — <code>{score}</code>\n",
+        "leaderboard_you": "{medal} <b>SIZ</b> — <code>{score}</code>\n",
         "leaderboard_footer": "",
         "leaderboard_empty": "📭 Reyting bos. Top-ǵa tusiw ushın kvizlerdi ótip shıǵıń!",
-        "leaderboard_your_rank": "\n\n📍 Sizdiń ornıńız: #{rank} — {score} ball ({percentage}%, {quizzes} kviz)",
+        "leaderboard_your_rank": "\n<b>━━━━━━━━━━━━━━━</b>\n📍 <b>Sizdiń ornıńız:</b> #{rank}\n💯 <b>Ball:</b> <code>{score}</code>",
+        "leaderboard_separator_top3": "\n<b>━━━━━━━━━━━━━━━</b>\n",
         "leaderboard_mentor_title": "🏆 <b>Oqıwshılar reytingi (Top-20)</b>\n\n",
         "leaderboard_mentor_entry": "{rank}. {name} — {score} ball\n   📊 {percentage}% ortasha • {quizzes} kviz\n",
 
@@ -560,12 +562,13 @@ TEXTS = {
 
         # ===== LEADERBOARD =====
         "btn_leaderboard": "🏆 Leaderboard",
-        "leaderboard_title": "🏆 <b>Top 10 Students</b>\n\n",
-        "leaderboard_entry": "{rank}. {name} — {score} pts ({percentage}%, {quizzes} quiz.)\n",
-        "leaderboard_you": "{rank}. <b>YOU</b> — {score} pts ({percentage}%, {quizzes} quiz.)\n",
+        "leaderboard_title": "🏆 <b>Student Rankings</b>\n\n",
+        "leaderboard_entry": "{medal} {name} — <code>{score}</code>\n",
+        "leaderboard_you": "{medal} <b>YOU</b> — <code>{score}</code>\n",
         "leaderboard_footer": "",
         "leaderboard_empty": "📭 Leaderboard is empty. Take quizzes to get on the board!",
-        "leaderboard_your_rank": "\n\n📍 Your rank: #{rank} — {score} pts ({percentage}%, {quizzes} quiz.)",
+        "leaderboard_your_rank": "\n<b>━━━━━━━━━━━━━━━</b>\n📍 <b>Your rank:</b> #{rank}\n💯 <b>Score:</b> <code>{score}</code>",
+        "leaderboard_separator_top3": "\n<b>━━━━━━━━━━━━━━━</b>\n",
         "leaderboard_mentor_title": "🏆 <b>Student Rankings (Top 20)</b>\n\n",
         "leaderboard_mentor_entry": "{rank}. {name} — {score} pts\n   📊 {percentage}% avg • {quizzes} quiz.\n",
 
