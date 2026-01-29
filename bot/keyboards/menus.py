@@ -20,7 +20,7 @@ def mentor_menu(lang: str) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=t("btn_upload", lang)), KeyboardButton(text=t("btn_manage", lang))],
             [KeyboardButton(text=t("btn_view", lang)), KeyboardButton(text=t("btn_quizzes", lang))],
             [KeyboardButton(text=t("btn_statistics", lang)), KeyboardButton(text=t("btn_questions", lang))],
-            [KeyboardButton(text=t("btn_language", lang))]
+            [KeyboardButton(text=t("btn_leaderboard", lang)), KeyboardButton(text=t("btn_language", lang))]
         ],
         resize_keyboard=True
     )
@@ -30,7 +30,8 @@ def student_menu(lang: str) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=t("btn_lesson_materials", lang)), KeyboardButton(text=t("btn_quizzes", lang))],
-            [KeyboardButton(text=t("btn_ask_question", lang)), KeyboardButton(text=t("btn_language", lang))]
+            [KeyboardButton(text=t("btn_ask_question", lang)), KeyboardButton(text=t("btn_leaderboard", lang))],
+            [KeyboardButton(text=t("btn_language", lang))]
         ],
         resize_keyboard=True
     )

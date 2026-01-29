@@ -165,6 +165,34 @@ TEXTS = {
         "quiz_item_mentor": "📝 {title} • {questions} вопр. • {attempts} попыток",
         "quiz_item_student": "📝 {title}",
         "quiz_item_student_score": "📝 {title} • {score}/{total}",
+
+        # ===== LEADERBOARD =====
+        "btn_leaderboard": "🏆 Рейтинг",
+        "leaderboard_title": "🏆 <b>Топ-10 учеников</b>\n\n",
+        "leaderboard_entry": "{rank}. {name} — {score} балл. ({percentage}%, {quizzes} квиз.)\n",
+        "leaderboard_you": "{rank}. <b>ВЫ</b> — {score} балл. ({percentage}%, {quizzes} квиз.)\n",
+        "leaderboard_footer": "",
+        "leaderboard_empty": "📭 Рейтинг пуст. Пройдите квизы чтобы попасть в топ!",
+        "leaderboard_your_rank": "\n\n📍 Ваша позиция: #{rank} — {score} балл. ({percentage}%, {quizzes} квиз.)",
+        "leaderboard_mentor_title": "🏆 <b>Рейтинг учеников (Топ-20)</b>\n\n",
+        "leaderboard_mentor_entry": "{rank}. {name} — {score} балл.\n   📊 {percentage}% среднее • {quizzes} квиз.\n",
+
+        # Animal names for anonymization
+        "animal_fox": "🦊 Лиса",
+        "animal_bear": "🐻 Медведь",
+        "animal_eagle": "🦅 Орёл",
+        "animal_wolf": "🐺 Волк",
+        "animal_lion": "🦁 Лев",
+        "animal_tiger": "🐯 Тигр",
+        "animal_panda": "🐼 Панда",
+        "animal_koala": "🐨 Коала",
+        "animal_owl": "🦉 Сова",
+        "animal_shark": "🦈 Акула",
+        "animal_cheetah": "🐆 Гепард",
+        "animal_giraffe": "🦒 Жираф",
+        "animal_elephant": "🐘 Слон",
+        "animal_rhino": "🦏 Носорог",
+        "animal_kangaroo": "🦘 Кенгуру",
     },
     
     "qq": {
@@ -333,6 +361,34 @@ TEXTS = {
         "quiz_item_mentor": "📝 {title} • {questions} soraw • {attempts} talaban",
         "quiz_item_student": "📝 {title}",
         "quiz_item_student_score": "📝 {title} • {score}/{total}",
+
+        # ===== LEADERBOARD =====
+        "btn_leaderboard": "🏆 Reyting",
+        "leaderboard_title": "🏆 <b>Top-10 oqıwshılar</b>\n\n",
+        "leaderboard_entry": "{rank}. {name} — {score} ball ({percentage}%, {quizzes} kviz)\n",
+        "leaderboard_you": "{rank}. <b>SIZ</b> — {score} ball ({percentage}%, {quizzes} kviz)\n",
+        "leaderboard_footer": "",
+        "leaderboard_empty": "📭 Reyting bos. Top-ǵa tusiw ushın kvizlerdi ótip shıǵıń!",
+        "leaderboard_your_rank": "\n\n📍 Sizdiń ornıńız: #{rank} — {score} ball ({percentage}%, {quizzes} kviz)",
+        "leaderboard_mentor_title": "🏆 <b>Oqıwshılar reytingi (Top-20)</b>\n\n",
+        "leaderboard_mentor_entry": "{rank}. {name} — {score} ball\n   📊 {percentage}% ortasha • {quizzes} kviz\n",
+
+        # Animal names for anonymization
+        "animal_fox": "🦊 Túlki",
+        "animal_bear": "🐻 Ayıw",
+        "animal_eagle": "🦅 Búrkіt",
+        "animal_wolf": "🐺 Qasqır",
+        "animal_lion": "🦁 Arıslan",
+        "animal_tiger": "🐯 Jolbarıs",
+        "animal_panda": "🐼 Panda",
+        "animal_koala": "🐨 Koala",
+        "animal_owl": "🦉 Bayǵus",
+        "animal_shark": "🦈 Akula",
+        "animal_cheetah": "🐆 Gepard",
+        "animal_giraffe": "🦒 Jıraffa",
+        "animal_elephant": "🐘 Pil",
+        "animal_rhino": "🦏 Kergedan",
+        "animal_kangaroo": "🦘 Kenguru",
     },
     
     "en": {
@@ -501,6 +557,34 @@ TEXTS = {
         "quiz_item_mentor": "📝 {title} • {questions} q. • {attempts} attempts",
         "quiz_item_student": "📝 {title}",
         "quiz_item_student_score": "📝 {title} • {score}/{total}",
+
+        # ===== LEADERBOARD =====
+        "btn_leaderboard": "🏆 Leaderboard",
+        "leaderboard_title": "🏆 <b>Top 10 Students</b>\n\n",
+        "leaderboard_entry": "{rank}. {name} — {score} pts ({percentage}%, {quizzes} quiz.)\n",
+        "leaderboard_you": "{rank}. <b>YOU</b> — {score} pts ({percentage}%, {quizzes} quiz.)\n",
+        "leaderboard_footer": "",
+        "leaderboard_empty": "📭 Leaderboard is empty. Take quizzes to get on the board!",
+        "leaderboard_your_rank": "\n\n📍 Your rank: #{rank} — {score} pts ({percentage}%, {quizzes} quiz.)",
+        "leaderboard_mentor_title": "🏆 <b>Student Rankings (Top 20)</b>\n\n",
+        "leaderboard_mentor_entry": "{rank}. {name} — {score} pts\n   📊 {percentage}% avg • {quizzes} quiz.\n",
+
+        # Animal names for anonymization
+        "animal_fox": "🦊 Fox",
+        "animal_bear": "🐻 Bear",
+        "animal_eagle": "🦅 Eagle",
+        "animal_wolf": "🐺 Wolf",
+        "animal_lion": "🦁 Lion",
+        "animal_tiger": "🐯 Tiger",
+        "animal_panda": "🐼 Panda",
+        "animal_koala": "🐨 Koala",
+        "animal_owl": "🦉 Owl",
+        "animal_shark": "🦈 Shark",
+        "animal_cheetah": "🐆 Cheetah",
+        "animal_giraffe": "🦒 Giraffe",
+        "animal_elephant": "🐘 Elephant",
+        "animal_rhino": "🦏 Rhino",
+        "animal_kangaroo": "🦘 Kangaroo",
     },
 }
 

@@ -652,3 +652,91 @@ def shuffle_quiz_questions(quiz):
         question.order = i
         question.save()
     return len(questions)
+
+
+@sync_to_async
+def get_global_leaderboard(mentor, limit=10):
+    """
+    Get global leaderboard for students based on quiz performance.
+    Returns list of (student, rating_score, avg_percentage, total_quizzes) ordered by rating.
+    Only includes students who have completed at least one quiz.
+
+    Rating formula: avg_percentage × (1 + min(total_quizzes / 10, 1) × 0.5)
+    This gives up to 50% bonus for activity (max at 10+ quizzes).
+    """
+    from django.db.models import Count, Sum, F, FloatField, Case, When, Value
+    from django.db.models.functions import Cast, Least
+
+    # Get students with their quiz statistics
+    leaderboard = Student.objects.filter(
+        mentor=mentor,
+        quiz_attempts__finished_at__isnull=False
+    ).annotate(
+        total_quizzes=Count('quiz_attempts__quiz', distinct=True),
+        total_score=Sum('quiz_attempts__score'),
+        total_questions=Sum('quiz_attempts__total'),
+        avg_percentage=Cast(F('total_score'), FloatField()) * 100.0 / Cast(F('total_questions'), FloatField())
+    ).filter(
+        total_quizzes__gt=0
+    ).order_by('-avg_percentage', '-total_quizzes')
+
+    # Calculate rating score with activity bonus
+    results = []
+    for student in leaderboard:
+        avg_percentage = round(student.avg_percentage, 1)
+        activity_bonus = min(student.total_quizzes / 10.0, 1.0) * 0.5
+        rating_score = round(avg_percentage * (1 + activity_bonus), 1)
+        results.append((student, rating_score, avg_percentage, student.total_quizzes))
+
+    # Sort by rating score descending
+    results.sort(key=lambda x: (-x[1], -x[2], -x[3]))
+
+    return results[:limit]
+
+
+@sync_to_async
+def get_student_rank(student, mentor):
+    """
+    Get student's rank in the global leaderboard.
+    Returns (rank, rating_score, avg_percentage, total_quizzes) or None if student hasn't completed any quiz.
+
+    Rating formula: avg_percentage × (1 + min(total_quizzes / 10, 1) × 0.5)
+    """
+    from django.db.models import Count, Sum, F, FloatField
+    from django.db.models.functions import Cast
+
+    # Get all students with quiz attempts
+    all_students = Student.objects.filter(
+        mentor=mentor,
+        quiz_attempts__finished_at__isnull=False
+    ).annotate(
+        total_quizzes=Count('quiz_attempts__quiz', distinct=True),
+        total_score=Sum('quiz_attempts__score'),
+        total_questions=Sum('quiz_attempts__total'),
+        avg_percentage=Cast(F('total_score'), FloatField()) * 100.0 / Cast(F('total_questions'), FloatField())
+    ).filter(
+        total_quizzes__gt=0
+    )
+
+    # Calculate rating scores and sort
+    student_data = []
+    for s in all_students:
+        avg_percentage = round(s.avg_percentage, 1)
+        activity_bonus = min(s.total_quizzes / 10.0, 1.0) * 0.5
+        rating_score = round(avg_percentage * (1 + activity_bonus), 1)
+        student_data.append({
+            'id': s.id,
+            'rating_score': rating_score,
+            'avg_percentage': avg_percentage,
+            'total_quizzes': s.total_quizzes
+        })
+
+    # Sort by rating score descending
+    student_data.sort(key=lambda x: (-x['rating_score'], -x['avg_percentage'], -x['total_quizzes']))
+
+    # Find student's position
+    for rank, s_data in enumerate(student_data, 1):
+        if s_data['id'] == student.id:
+            return (rank, s_data['rating_score'], s_data['avg_percentage'], s_data['total_quizzes'])
+
+    return None

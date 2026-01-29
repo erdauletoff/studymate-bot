@@ -71,7 +71,8 @@ from bot.db import (
     get_quiz_stats, get_quiz_stats_by_ids, get_quiz_top_students, save_quiz_answer,
     get_attempt_by_id, get_attempt_answers, set_quiz_active,
     delete_quiz_question, get_next_quiz_question_order, update_quiz_question,
-    archive_quizzes_by_title, quiz_title_exists
+    archive_quizzes_by_title, quiz_title_exists,
+    get_global_leaderboard, get_student_rank
 )
 from bot.utils.quiz_parser import parse_quiz_file
 
@@ -1400,3 +1401,101 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await show_question(callback.message, next_question, current_index + 1, len(question_ids), lang, attempt_id, state, bot, edit=True)
 
     await callback.answer()
+
+
+# ==================== LEADERBOARD ====================
+
+def get_animal_name(lang: str, index: int) -> str:
+    """Get animal name for anonymization based on index"""
+    animals = [
+        "animal_fox", "animal_bear", "animal_eagle", "animal_wolf", "animal_lion",
+        "animal_tiger", "animal_panda", "animal_koala", "animal_owl", "animal_shark",
+        "animal_cheetah", "animal_giraffe", "animal_elephant", "animal_rhino", "animal_kangaroo"
+    ]
+    # Use modulo to cycle through animals if we have more than 15 students
+    animal_key = animals[index % len(animals)]
+    return t(animal_key, lang)
+
+
+@router.message(F.text.in_(["🏆 Рейтинг", "🏆 Reyting", "🏆 Leaderboard"]))
+async def show_leaderboard(message: Message):
+    lang = await get_user_language(message.from_user.id)
+
+    # Check if mentor
+    if await is_mentor(message.from_user.id):
+        await show_mentor_leaderboard(message, lang)
+        return
+
+    # Check if student
+    student = await get_student_by_telegram_id(message.from_user.id)
+    if not student:
+        await message.answer(t("not_assigned", lang))
+        return
+
+    mentor = await get_student_mentor(message.from_user.id)
+    if not mentor:
+        await message.answer(t("not_assigned", lang))
+        return
+
+    # Get leaderboard data
+    leaderboard = await get_global_leaderboard(mentor, limit=10)
+
+    if not leaderboard:
+        await message.answer(t("leaderboard_empty", lang))
+        return
+
+    # Get current student's rank
+    student_rank_data = await get_student_rank(student, mentor)
+
+    # Build leaderboard text
+    text = t("leaderboard_title", lang)
+
+    for rank, (lb_student, rating_score, avg_percentage, total_quizzes) in enumerate(leaderboard, 1):
+        if lb_student.id == student.id:
+            # Show student's own name
+            text += t("leaderboard_you", lang, rank=rank, score=rating_score, percentage=avg_percentage, quizzes=total_quizzes)
+        else:
+            # Show animal name for other students
+            animal_name = get_animal_name(lang, rank - 1)
+            text += t("leaderboard_entry", lang, rank=rank, name=animal_name, score=rating_score, percentage=avg_percentage, quizzes=total_quizzes)
+
+    # Add student's rank if not in top 10
+    if student_rank_data and student_rank_data[0] > 10:
+        rank, rating_score, avg_percentage, total_quizzes = student_rank_data
+        text += t("leaderboard_your_rank", lang, rank=rank, score=rating_score, percentage=avg_percentage, quizzes=total_quizzes)
+
+    text += t("leaderboard_footer", lang)
+
+    await message.answer(text, parse_mode="HTML")
+
+
+async def show_mentor_leaderboard(message: Message, lang: str):
+    """Show leaderboard for mentor with real student names"""
+    mentor = await get_mentor_by_telegram_id(message.from_user.id)
+    if not mentor:
+        await message.answer(t("error", lang))
+        return
+
+    # Get top 20 students for mentor
+    leaderboard = await get_global_leaderboard(mentor, limit=20)
+
+    if not leaderboard:
+        await message.answer(t("leaderboard_empty", lang))
+        return
+
+    # Build leaderboard text with real names
+    text = t("leaderboard_mentor_title", lang)
+
+    for rank, (student, rating_score, avg_percentage, total_quizzes) in enumerate(leaderboard, 1):
+        # Show real student name for mentor
+        student_name = str(student)  # Uses Student.__str__() method
+        text += t("leaderboard_mentor_entry", lang,
+                 rank=rank,
+                 name=escape_html(student_name),
+                 score=rating_score,
+                 percentage=avg_percentage,
+                 quizzes=total_quizzes)
+
+    text += t("leaderboard_footer", lang)
+
+    await message.answer(text, parse_mode="HTML")
