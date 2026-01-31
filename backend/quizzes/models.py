@@ -4,10 +4,19 @@ from backend.students.models import Student
 
 
 class Quiz(models.Model):
+    QUIZ_TYPE_CHOICES = [
+        ('practice', 'Practice'),
+        ('ranked', 'Ranked'),
+    ]
+
     mentor = models.ForeignKey(Mentor, on_delete=models.CASCADE, related_name='quizzes')
     title = models.CharField(max_length=200)
     topic = models.CharField(max_length=100, blank=True, null=True)
     is_active = models.BooleanField(default=True)
+    quiz_type = models.CharField(max_length=20, choices=QUIZ_TYPE_CHOICES, default='practice')
+    available_from = models.DateTimeField(blank=True, null=True)
+    available_until = models.DateTimeField(blank=True, null=True)
+    max_attempts = models.PositiveIntegerField(default=999)  # 999 = unlimited for practice
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

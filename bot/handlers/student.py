@@ -2,11 +2,11 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
-from bot.keyboards import topics_for_view, files_for_view
+from bot.keyboards import topics_for_view, files_for_view, materials_submenu
 from bot.texts import t
 from bot.db import (
     is_mentor, get_student_mentor, get_mentor_by_telegram_id,
-    get_topics_by_mentor, get_topic_by_id, get_materials_by_topic, 
+    get_topics_by_mentor, get_topic_by_id, get_materials_by_topic,
     get_material_by_id, get_materials_count_by_topics,
     get_student_by_telegram_id, record_download, get_user_language
 )
@@ -19,14 +19,17 @@ async def view_materials(message: Message, state: FSMContext):
     await state.clear()
     lang = await get_user_language(message.from_user.id)
 
+    # For mentors, show materials management submenu
     if await is_mentor(message.from_user.id):
-        mentor = await get_mentor_by_telegram_id(message.from_user.id)
-        no_materials_text = "no_materials"
-        header_text = "your_materials"
-    else:
-        mentor = await get_student_mentor(message.from_user.id)
-        no_materials_text = "no_materials_yet"
-        header_text = "lesson_materials"
+        await message.answer(
+            t("materials_submenu_header", lang),
+            reply_markup=materials_submenu(lang),
+            parse_mode="HTML"
+        )
+        return
+
+    # For students, show materials list
+    mentor = await get_student_mentor(message.from_user.id)
 
     if not mentor:
         await message.answer(t("not_assigned", lang))
@@ -35,17 +38,17 @@ async def view_materials(message: Message, state: FSMContext):
     topics = await get_topics_by_mentor(mentor)
 
     if not topics:
-        await message.answer(t(no_materials_text, lang))
+        await message.answer(t("no_materials_yet", lang))
         return
 
     materials_count = await get_materials_count_by_topics(topics)
     keyboard = topics_for_view(topics, materials_count, lang, page=0)
 
     if not keyboard.inline_keyboard:
-        await message.answer(t(no_materials_text, lang))
+        await message.answer(t("no_materials_yet", lang))
         return
 
-    await message.answer(t(header_text, lang), reply_markup=keyboard, parse_mode="HTML")
+    await message.answer(t("lesson_materials", lang), reply_markup=keyboard, parse_mode="HTML")
 
 
 @router.callback_query(F.data.startswith("viewpage_"))

@@ -101,6 +101,29 @@ def get_or_create_student(telegram_id: int, username: str = None, first_name: st
 
 
 @sync_to_async
+def update_student_full_name(telegram_id: int, full_name: str):
+    """Update student's full name and mark profile as completed"""
+    try:
+        student = Student.objects.get(telegram_id=telegram_id)
+        student.full_name = full_name.strip()
+        student.profile_completed = True
+        student.save()
+        return student
+    except Student.DoesNotExist:
+        return None
+
+
+@sync_to_async
+def is_student_profile_completed(telegram_id: int) -> bool:
+    """Check if student has completed their profile"""
+    try:
+        student = Student.objects.get(telegram_id=telegram_id)
+        return student.profile_completed
+    except Student.DoesNotExist:
+        return False
+
+
+@sync_to_async
 def assign_student_to_mentor(student, mentor):
     student.mentor = mentor
     student.save()
@@ -119,6 +142,16 @@ def get_student_mentor(telegram_id: int):
 def get_student_by_telegram_id(telegram_id: int):
     try:
         return Student.objects.get(telegram_id=telegram_id)
+    except Student.DoesNotExist:
+        return None
+
+
+@sync_to_async
+def get_student_quiz_stats(telegram_id: int):
+    """Get student's quiz statistics"""
+    try:
+        student = Student.objects.get(telegram_id=telegram_id)
+        return student.get_quiz_stats()
     except Student.DoesNotExist:
         return None
 
@@ -302,6 +335,36 @@ def get_active_quizzes_by_mentor(mentor):
 
 
 @sync_to_async
+def get_ranked_quizzes_by_mentor(mentor):
+    """Get active ranked quizzes (exam mode) for students"""
+    from django.utils import timezone
+    now = timezone.now()
+    return list(Quiz.objects.filter(
+        mentor=mentor,
+        is_active=True,
+        quiz_type='ranked',
+        available_until__gt=now
+    ))
+
+
+@sync_to_async
+def get_practice_quizzes_by_mentor(mentor):
+    """Get practice quizzes + expired ranked quizzes (review mode) for students"""
+    from django.utils import timezone
+    now = timezone.now()
+    from django.db.models import Q
+
+    # Practice quizzes OR expired ranked quizzes
+    return list(Quiz.objects.filter(
+        mentor=mentor,
+        is_active=True
+    ).filter(
+        Q(quiz_type='practice') |
+        Q(quiz_type='ranked', available_until__lte=now)
+    ))
+
+
+@sync_to_async
 def get_quiz_by_id(quiz_id: int):
     try:
         return Quiz.objects.get(id=quiz_id)
@@ -394,6 +457,34 @@ def finish_quiz_attempt(attempt_id: int, score: int):
         attempt.score = score
         attempt.finished_at = timezone.now()
         attempt.save()
+
+        # Update student's learning streak
+        student = attempt.student
+        from datetime import date, timedelta
+        today = date.today()
+
+        # If this is the first quiz ever
+        if student.last_quiz_date is None:
+            student.current_streak = 1
+            student.longest_streak = 1
+            student.last_quiz_date = today
+            student.save()
+        # If already completed a quiz today, streak doesn't change
+        elif student.last_quiz_date == today:
+            pass
+        # If completed yesterday, increment streak
+        else:
+            yesterday = today - timedelta(days=1)
+            if student.last_quiz_date == yesterday:
+                student.current_streak += 1
+                if student.current_streak > student.longest_streak:
+                    student.longest_streak = student.current_streak
+            else:
+                # Streak broken, reset to 1
+                student.current_streak = 1
+            student.last_quiz_date = today
+            student.save()
+
         return attempt
     except QuizAttempt.DoesNotExist:
         return None
@@ -657,36 +748,52 @@ def shuffle_quiz_questions(quiz):
 @sync_to_async
 def get_global_leaderboard(mentor, limit=10):
     """
-    Get global leaderboard for students based on quiz performance.
+    Get global leaderboard for students based on RANKED quiz performance only.
     Returns list of (student, rating_score, avg_percentage, total_quizzes) ordered by rating.
-    Only includes students who have completed at least one quiz.
+    Only includes students who have completed at least one ranked quiz.
+
+    Only counts attempts where:
+    - quiz.quiz_type == 'ranked'
+    - attempt.started_at < quiz.available_until
 
     Rating formula: avg_percentage × (1 + min(total_quizzes / 10, 1) × 0.5)
     This gives up to 50% bonus for activity (max at 10+ quizzes).
     """
-    from django.db.models import Count, Sum, F, FloatField, Case, When, Value
-    from django.db.models.functions import Cast, Least
+    from django.db.models import Q, F
+    from django.utils import timezone
 
-    # Get students with their quiz statistics
-    leaderboard = Student.objects.filter(
-        mentor=mentor,
-        quiz_attempts__finished_at__isnull=False
-    ).annotate(
-        total_quizzes=Count('quiz_attempts__quiz', distinct=True),
-        total_score=Sum('quiz_attempts__score'),
-        total_questions=Sum('quiz_attempts__total'),
-        avg_percentage=Cast(F('total_score'), FloatField()) * 100.0 / Cast(F('total_questions'), FloatField())
-    ).filter(
-        total_quizzes__gt=0
-    ).order_by('-avg_percentage', '-total_quizzes')
+    # Get all students of this mentor
+    students = Student.objects.filter(mentor=mentor)
 
-    # Calculate rating score with activity bonus
     results = []
-    for student in leaderboard:
-        avg_percentage = round(student.avg_percentage, 1)
-        activity_bonus = min(student.total_quizzes / 10.0, 1.0) * 0.5
+    for student in students:
+        # Get valid ranked attempts for this student
+        # Valid = quiz_type='ranked' AND started_at < available_until
+        valid_attempts = QuizAttempt.objects.filter(
+            student=student,
+            quiz__mentor=mentor,
+            quiz__quiz_type='ranked',
+            finished_at__isnull=False
+        ).filter(
+            started_at__lt=F('quiz__available_until')
+        )
+
+        if not valid_attempts.exists():
+            continue
+
+        # Calculate stats
+        total_quizzes = valid_attempts.values('quiz').distinct().count()
+        total_score = sum(a.score for a in valid_attempts)
+        total_questions = sum(a.total for a in valid_attempts)
+
+        if total_questions == 0:
+            continue
+
+        avg_percentage = round((total_score / total_questions) * 100.0, 1)
+        activity_bonus = min(total_quizzes / 10.0, 1.0) * 0.5
         rating_score = round(avg_percentage * (1 + activity_bonus), 1)
-        results.append((student, rating_score, avg_percentage, student.total_quizzes))
+
+        results.append((student, rating_score, avg_percentage, total_quizzes))
 
     # Sort by rating score descending
     results.sort(key=lambda x: (-x[1], -x[2], -x[3]))
@@ -694,41 +801,112 @@ def get_global_leaderboard(mentor, limit=10):
     return results[:limit]
 
 
+def is_exam_mode(quiz) -> bool:
+    """Check if quiz is currently in exam mode (ranked + before deadline)"""
+    if quiz.quiz_type != 'ranked':
+        return False
+    if not quiz.available_until:
+        return False
+    from django.utils import timezone
+    return timezone.now() < quiz.available_until
+
+
+def is_practice_mode(quiz) -> bool:
+    """Check if quiz is in practice mode (practice OR expired ranked)"""
+    if quiz.quiz_type == 'practice':
+        return True
+    if quiz.quiz_type == 'ranked' and quiz.available_until:
+        from django.utils import timezone
+        return timezone.now() >= quiz.available_until
+    return False
+
+
+@sync_to_async
+def can_attempt_quiz(student, quiz) -> tuple[bool, str]:
+    """
+    Check if student can attempt quiz.
+    Returns (can_attempt: bool, reason: str)
+    reason is empty string if can attempt, otherwise contains error key for translation
+    """
+    from django.utils import timezone
+    now = timezone.now()
+
+    # Check if quiz is in exam mode
+    if is_exam_mode(quiz):
+        # Ranked quiz in exam mode
+        # Check if available_from has passed
+        if quiz.available_from and now < quiz.available_from:
+            return False, "quiz_not_started"
+
+        # Check if deadline hasn't passed
+        if now >= quiz.available_until:
+            return False, "quiz_expired"
+
+        # Check attempt limit
+        attempts_count = QuizAttempt.objects.filter(
+            student=student,
+            quiz=quiz,
+            finished_at__isnull=False
+        ).count()
+
+        if attempts_count >= quiz.max_attempts:
+            return False, "quiz_max_attempts"
+
+        return True, ""
+
+    # Practice mode - always allowed
+    return True, ""
+
+
 @sync_to_async
 def get_student_rank(student, mentor):
     """
-    Get student's rank in the global leaderboard.
-    Returns (rank, rating_score, avg_percentage, total_quizzes) or None if student hasn't completed any quiz.
+    Get student's rank in the global leaderboard based on RANKED quiz performance only.
+    Returns (rank, rating_score, avg_percentage, total_quizzes) or None if student hasn't completed any ranked quiz.
+
+    Only counts attempts where:
+    - quiz.quiz_type == 'ranked'
+    - attempt.started_at < quiz.available_until
 
     Rating formula: avg_percentage × (1 + min(total_quizzes / 10, 1) × 0.5)
     """
-    from django.db.models import Count, Sum, F, FloatField
-    from django.db.models.functions import Cast
+    from django.db.models import F
 
-    # Get all students with quiz attempts
-    all_students = Student.objects.filter(
-        mentor=mentor,
-        quiz_attempts__finished_at__isnull=False
-    ).annotate(
-        total_quizzes=Count('quiz_attempts__quiz', distinct=True),
-        total_score=Sum('quiz_attempts__score'),
-        total_questions=Sum('quiz_attempts__total'),
-        avg_percentage=Cast(F('total_score'), FloatField()) * 100.0 / Cast(F('total_questions'), FloatField())
-    ).filter(
-        total_quizzes__gt=0
-    )
+    # Get all students of this mentor
+    all_students = Student.objects.filter(mentor=mentor)
 
-    # Calculate rating scores and sort
     student_data = []
     for s in all_students:
-        avg_percentage = round(s.avg_percentage, 1)
-        activity_bonus = min(s.total_quizzes / 10.0, 1.0) * 0.5
+        # Get valid ranked attempts for this student
+        valid_attempts = QuizAttempt.objects.filter(
+            student=s,
+            quiz__mentor=mentor,
+            quiz__quiz_type='ranked',
+            finished_at__isnull=False
+        ).filter(
+            started_at__lt=F('quiz__available_until')
+        )
+
+        if not valid_attempts.exists():
+            continue
+
+        # Calculate stats
+        total_quizzes = valid_attempts.values('quiz').distinct().count()
+        total_score = sum(a.score for a in valid_attempts)
+        total_questions = sum(a.total for a in valid_attempts)
+
+        if total_questions == 0:
+            continue
+
+        avg_percentage = round((total_score / total_questions) * 100.0, 1)
+        activity_bonus = min(total_quizzes / 10.0, 1.0) * 0.5
         rating_score = round(avg_percentage * (1 + activity_bonus), 1)
+
         student_data.append({
             'id': s.id,
             'rating_score': rating_score,
             'avg_percentage': avg_percentage,
-            'total_quizzes': s.total_quizzes
+            'total_quizzes': total_quizzes
         })
 
     # Sort by rating score descending

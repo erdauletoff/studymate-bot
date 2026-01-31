@@ -14,7 +14,10 @@
       "Bash(git push:*)",
       "Bash(heroku:*)",
       "Bash(ping:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(python test_quizzes.py:*)",
+      "Bash(timeout 5 python:*)",
+      "Bash(python manage.py shell:*)"
     ]
   }
 }

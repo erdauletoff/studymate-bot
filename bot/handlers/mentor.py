@@ -4,7 +4,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
 from bot.keyboards import (
-    mentor_menu, cancel_menu,
+    mentor_menu, cancel_menu, materials_submenu,
     topics_for_upload, topics_for_manage, files_for_manage,
     topics_for_view
 )
@@ -18,6 +18,23 @@ from bot.db import (
 )
 
 router = Router()
+
+
+# ==================== MATERIALS SUBMENU ====================
+# Note: Materials button ("📚 Материалы") is handled in student.py for both mentors and students
+# Mentors get the materials submenu, students get the materials list
+
+@router.message(F.text.in_(["⬅️ Назад", "⬅️ Artqa", "⬅️ Back"]))
+async def back_to_main_menu(message: Message, state: FSMContext):
+    if not await is_mentor(message.from_user.id):
+        return
+    await state.clear()
+    lang = await get_user_language(message.from_user.id)
+    mentor = await get_mentor_by_telegram_id(message.from_user.id)
+    await message.answer(
+        t("welcome_mentor", lang, name=mentor.name),
+        reply_markup=mentor_menu(lang)
+    )
 
 
 class UploadStates(StatesGroup):
@@ -61,7 +78,7 @@ async def receive_topic_name(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         t("topic_created", lang, name=topic.name),
-        reply_markup=mentor_menu(lang)
+        reply_markup=materials_submenu(lang)
     )
 
 
@@ -116,7 +133,7 @@ async def receive_file_title(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
         t("material_added", lang, topic=topic.name, title=message.text.strip()),
-        reply_markup=mentor_menu(lang)
+        reply_markup=materials_submenu(lang)
     )
 
 

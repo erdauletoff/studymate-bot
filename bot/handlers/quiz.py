@@ -7,11 +7,13 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from asgiref.sync import sync_to_async
 
 QUESTION_TIMEOUT = 20  # seconds per question
 QUESTIONS_PER_PAGE = 5
 ANSWERS_PER_PAGE = 10  # answers per review page
 QUIZ_SESSION_TIMEOUT = 420  # 7 minutes - auto-reset quiz state
+LEADERBOARD_PER_PAGE = 10  # students per page in mentor leaderboard
 
 # Store active timers: {attempt_id: (timeout_task, countdown_task)}
 active_timers = {}
@@ -35,6 +37,48 @@ def get_option_text(question, letter: str) -> str:
         'D': question.option_d,
     }
     return options.get(letter.upper(), letter)
+
+
+async def build_quiz_result_text(attempt_id: int, score: int, total: int, lang: str) -> tuple[str, list, bool]:
+    """
+    Build quiz result text based on quiz mode (exam/practice).
+    Returns (text, buttons, show_review)
+    """
+    from bot.db import is_exam_mode
+
+    attempt = await get_attempt_by_id(attempt_id)
+    if not attempt:
+        return "", [], False
+
+    quiz = await get_quiz_by_id(attempt.quiz_id)
+    if not quiz:
+        return "", [], False
+
+    # Check if quiz is in exam mode
+    if is_exam_mode(quiz):
+        # Exam mode: show only score, hide correct answers
+        result_text = t("quiz_exam_mode_result", lang, score=score, total=total)
+        return result_text, [], False
+    else:
+        # Practice mode: show full review with correct answers
+        avg = await get_quiz_average_score(quiz)
+        result_text = t("quiz_finished", lang, score=score, total=total, avg=f"{round(avg, 1)}/{total}")
+
+        # Add review
+        answers = await get_attempt_answers(attempt)
+        review_text, total_pages = build_review_text(answers, 0, lang)
+        result_text += review_text
+
+        # Add pagination buttons if needed
+        buttons = []
+        if total_pages > 1:
+            nav = [
+                InlineKeyboardButton(text=f"1/{total_pages}", callback_data="noop"),
+                InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"reviewquiz_{attempt_id}_1")
+            ]
+            buttons.append(nav)
+
+        return result_text, buttons, True
 
 
 def build_review_text(answers, page: int, lang: str) -> str:
@@ -82,6 +126,8 @@ router = Router()
 class QuizStates(StatesGroup):
     waiting_quiz_file = State()
     waiting_quiz_confirm = State()
+    waiting_publish_mode = State()
+    waiting_ranked_start_time = State()
     taking_quiz = State()
 
 
@@ -173,61 +219,453 @@ async def quiz_menu(message: Message, state: FSMContext):
     lang = await get_user_language(message.from_user.id)
 
     if await is_mentor(message.from_user.id):
-        await show_mentor_quizzes(message, lang)
+        # Show choice between active and archived
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_active_quizzes", lang), callback_data="quizlist_active_0")],
+            [InlineKeyboardButton(text=t("btn_archived_quizzes", lang), callback_data="quizlist_archived_0")],
+            [InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")]
+        ]
+        await message.answer(
+            t("quiz_management_header", lang),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML"
+        )
     else:
         mentor = await get_student_mentor(message.from_user.id)
         if mentor:
-            await show_student_quizzes(message, mentor, lang)
+            # Show choice between ranked and practice for students
+            buttons = [
+                [InlineKeyboardButton(text=t("btn_ranked_quizzes", lang), callback_data="studentquiz_ranked_0")],
+                [InlineKeyboardButton(text=t("btn_practice_quizzes", lang), callback_data="studentquiz_practice_0")]
+            ]
+            await message.answer(
+                t("quiz_student_header", lang),
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+                parse_mode="HTML"
+            )
         else:
             await message.answer(t("not_assigned", lang))
 
 
-async def show_mentor_quizzes(message: Message, lang: str):
-    mentor = await get_mentor_by_telegram_id(message.from_user.id)
-    quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
-    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in quizzes])
+@router.callback_query(F.data.startswith("quizlist_"))
+async def show_quiz_list(callback: CallbackQuery):
+    """Handle quiz list navigation (active/archived with pagination)"""
+    if not await is_mentor(callback.from_user.id):
+        return
 
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    list_type = parts[1]  # 'active' or 'archived'
+    page = int(parts[2])
+
+    if list_type == "active":
+        await show_active_quizzes(callback.message, callback.from_user.id, lang, page, edit=True)
+    else:
+        await show_archived_quizzes(callback.message, callback.from_user.id, lang, page, edit=True)
+
+    await callback.answer()
+
+
+async def show_active_quizzes(message, user_id: int, lang: str, page: int = 0, edit: bool = False):
+    """Show active quizzes with pagination (5 per page)"""
+    QUIZZES_PER_PAGE = 5
+
+    mentor = await get_mentor_by_telegram_id(user_id)
+
+    if not mentor:
+        text = t("error_mentor_not_found", lang)
+        buttons = [[InlineKeyboardButton(text=t("btn_back_short", lang), callback_data="back_quizzes")]]
+        if edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        return
+
+    all_quizzes = await get_quizzes_by_mentor(mentor, include_inactive=False)
+    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in all_quizzes])
+
+    if not all_quizzes:
+        text = t("active_quizzes_header", lang) + "\n\n" + t("no_active_quizzes", lang)
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_archived_quizzes", lang), callback_data="quizlist_archived_0")],
+            [InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")]
+        ]
+        if edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        return
+
+    # Calculate pagination
+    total_pages = (len(all_quizzes) + QUIZZES_PER_PAGE - 1) // QUIZZES_PER_PAGE
+    start_idx = page * QUIZZES_PER_PAGE
+    end_idx = start_idx + QUIZZES_PER_PAGE
+    page_quizzes = all_quizzes[start_idx:end_idx]
+
+    # Build text
+    text = t("active_quizzes_header", lang) + "\n\n"
+    if total_pages > 1:
+        text += t("pagination_info", lang, page=page + 1, total=total_pages, count=len(all_quizzes)) + "\n\n"
+
+    # Build buttons
     buttons = []
-    for quiz in quizzes:
+    for quiz in page_quizzes:
         stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
-        title = quiz.title if quiz.is_active else f"🗄️ {quiz.title}"
+
+        # Add badge based on quiz type
+        if hasattr(quiz, 'quiz_type'):
+            if quiz.quiz_type == 'ranked':
+                badge = "🏆"
+            else:
+                badge = "📚"
+        else:
+            badge = "📝"
+
         buttons.append([InlineKeyboardButton(
-            text=t("quiz_item_mentor", lang, title=title, questions=stats['questions'], attempts=stats['attempts']),
+            text=f"{badge} {quiz.title} • {stats['questions']} вопр. • {stats['attempts']} попыток",
             callback_data=f"quizmanage_{quiz.id}"
         )])
 
+    # Pagination buttons
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"quizlist_active_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"quizlist_active_{page + 1}"))
+        buttons.append(nav)
+
+    # Bottom buttons
+    buttons.append([InlineKeyboardButton(text=t("btn_archived_short", lang), callback_data="quizlist_archived_0")])
     buttons.append([InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")])
 
-    if not quizzes:
-        text = t("no_quizzes", lang)
+    if edit:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     else:
-        text = t("quiz_mentor_list", lang)
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+async def show_archived_quizzes(message, user_id: int, lang: str, page: int = 0, edit: bool = False):
+    """Show archived quizzes with pagination (5 per page)"""
+    QUIZZES_PER_PAGE = 5
+
+    mentor = await get_mentor_by_telegram_id(user_id)
+
+    if not mentor:
+        text = t("error_mentor_not_found", lang)
+        buttons = [[InlineKeyboardButton(text=t("btn_back_short", lang), callback_data="back_quizzes")]]
+        if edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        return
+
+    all_quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
+    archived_quizzes = [q for q in all_quizzes if not q.is_active]
+    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in archived_quizzes])
+
+    if not archived_quizzes:
+        text = t("archived_quizzes_header", lang) + "\n\n" + t("no_archived_quizzes", lang)
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_active_quizzes", lang), callback_data="quizlist_active_0")],
+            [InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")]
+        ]
+        if edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        return
+
+    # Calculate pagination
+    total_pages = (len(archived_quizzes) + QUIZZES_PER_PAGE - 1) // QUIZZES_PER_PAGE
+    start_idx = page * QUIZZES_PER_PAGE
+    end_idx = start_idx + QUIZZES_PER_PAGE
+    page_quizzes = archived_quizzes[start_idx:end_idx]
+
+    # Build text
+    text = t("archived_quizzes_header", lang) + "\n\n"
+    if total_pages > 1:
+        text += t("pagination_info", lang, page=page + 1, total=total_pages, count=len(archived_quizzes)) + "\n\n"
+
+    # Build buttons
+    buttons = []
+    for quiz in page_quizzes:
+        stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+        buttons.append([InlineKeyboardButton(
+            text=f"🗄️ {quiz.title} • {stats['questions']} вопр. • {stats['attempts']} попыток",
+            callback_data=f"quizmanage_{quiz.id}"
+        )])
+
+    # Pagination buttons
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"quizlist_archived_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"quizlist_archived_{page + 1}"))
+        buttons.append(nav)
+
+    # Bottom buttons
+    buttons.append([InlineKeyboardButton(text=t("btn_active_short", lang), callback_data="quizlist_active_0")])
+    buttons.append([InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")])
+
+    if edit:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+async def show_mentor_quizzes(message: Message, lang: str, page: int = 0):
+    """Show mentor quizzes with pagination (5 per page) and separated by active/archived"""
+    QUIZZES_PER_PAGE = 5
+
+    mentor = await get_mentor_by_telegram_id(message.from_user.id)
+    all_quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
+
+    # Separate active and archived
+    active_quizzes = [q for q in all_quizzes if q.is_active]
+    archived_quizzes = [q for q in all_quizzes if not q.is_active]
+
+    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in all_quizzes])
+
+    # Build text
+    text = ""
+    buttons = []
+
+    # Active quizzes section
+    if active_quizzes:
+        text += "📝 <b>Активные квизы</b>\n\n"
+        for quiz in active_quizzes[:QUIZZES_PER_PAGE]:
+            stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+
+            # Add badge based on quiz type
+            if hasattr(quiz, 'quiz_type'):
+                if quiz.quiz_type == 'ranked':
+                    badge = "🏆"
+                else:
+                    badge = "📚"
+            else:
+                badge = "📝"
+
+            buttons.append([InlineKeyboardButton(
+                text=f"{badge} {quiz.title} • {stats['questions']} вопр. • {stats['attempts']} попыток",
+                callback_data=f"quizmanage_{quiz.id}"
+            )])
+
+        if len(active_quizzes) > QUIZZES_PER_PAGE:
+            text += f"\n<i>Показано {min(QUIZZES_PER_PAGE, len(active_quizzes))} из {len(active_quizzes)}</i>\n"
+    else:
+        text += "📝 <b>Активные квизы</b>\n\n"
+        text += t("no_quizzes", lang) + "\n"
+
+    # Archived quizzes section
+    text += "\n🗄️ <b>Архивированные квизы</b>\n\n"
+    if archived_quizzes:
+        # Calculate pagination for archived
+        start_idx = page * QUIZZES_PER_PAGE
+        end_idx = start_idx + QUIZZES_PER_PAGE
+        page_archived = archived_quizzes[start_idx:end_idx]
+        total_pages = (len(archived_quizzes) + QUIZZES_PER_PAGE - 1) // QUIZZES_PER_PAGE
+
+        for quiz in page_archived:
+            stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+            buttons.append([InlineKeyboardButton(
+                text=f"🗄️ {quiz.title} • {stats['questions']} вопр. • {stats['attempts']} попыток",
+                callback_data=f"quizmanage_{quiz.id}"
+            )])
+
+        if total_pages > 1:
+            text += f"<i>Страница {page + 1}/{total_pages}</i>\n"
+
+            # Pagination buttons for archived
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(text="◀️", callback_data=f"quizpage_{page - 1}"))
+            nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton(text="▶️", callback_data=f"quizpage_{page + 1}"))
+            if nav:
+                buttons.append(nav)
+    else:
+        text += "<i>Нет архивированных квизов</i>\n"
+
+    # Upload button
+    buttons.append([InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")])
 
     await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 
-async def show_student_quizzes(message: Message, mentor, lang: str):
-    quizzes = await get_active_quizzes_by_mentor(mentor)
-    student = await get_student_by_telegram_id(message.from_user.id)
+@router.callback_query(F.data.startswith("studentquiz_"))
+async def show_student_quiz_list(callback: CallbackQuery):
+    """Handle student quiz list navigation (ranked/practice with pagination)"""
+    lang = await get_user_language(callback.from_user.id)
+    parts = callback.data.split("_")
+    list_type = parts[1]  # 'ranked' or 'practice'
+    page = int(parts[2])
 
-    if not quizzes:
-        await message.answer(t("no_quizzes", lang))
+    mentor = await get_student_mentor(callback.from_user.id)
+    if not mentor:
+        await callback.answer(t("not_assigned", lang))
         return
 
+    if list_type == "ranked":
+        await show_student_ranked_quizzes(callback.message, callback.from_user.id, mentor, lang, page, edit=True)
+    else:
+        await show_student_practice_quizzes(callback.message, callback.from_user.id, mentor, lang, page, edit=True)
+
+    await callback.answer()
+
+
+async def show_student_ranked_quizzes(message, user_id: int, mentor, lang: str, page: int = 0, edit: bool = False):
+    """Show ranked quizzes for student with pagination (5 per page)"""
+    from bot.db import is_exam_mode
+
+    QUIZZES_PER_PAGE = 5
+
+    # Get all active quizzes
+    all_quizzes = await get_active_quizzes_by_mentor(mentor)
+    student = await get_student_by_telegram_id(user_id)
+
+    # Filter ranked quizzes (in exam mode)
+    ranked_quizzes = [quiz for quiz in all_quizzes if is_exam_mode(quiz)]
+
+    if not ranked_quizzes:
+        text = t("ranked_quizzes_header", lang) + "\n\n" + t("no_ranked_quizzes", lang)
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_practice_quizzes", lang), callback_data="studentquiz_practice_0")]
+        ]
+        if edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        return
+
+    # Calculate pagination
+    total_pages = (len(ranked_quizzes) + QUIZZES_PER_PAGE - 1) // QUIZZES_PER_PAGE
+    start_idx = page * QUIZZES_PER_PAGE
+    end_idx = start_idx + QUIZZES_PER_PAGE
+    page_quizzes = ranked_quizzes[start_idx:end_idx]
+
+    # Build text
+    text = t("ranked_quizzes_header", lang) + "\n\n"
+    if total_pages > 1:
+        text += t("pagination_info", lang, page=page + 1, total=total_pages, count=len(ranked_quizzes)) + "\n\n"
+
+    # Build buttons
     buttons = []
-    for quiz in quizzes:
+    for quiz in page_quizzes:
+        attempt = await get_student_attempt(student, quiz)
+        if attempt and attempt.finished_at:
+            # Already completed - show score
+            btn_text = f"✅ {quiz.title} — {attempt.score}/{attempt.total}"
+            callback_data = f"viewquiz_{quiz.id}"
+        else:
+            # Not attempted yet
+            btn_text = f"🏆 {quiz.title}"
+            callback_data = f"startquiz_{quiz.id}"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=callback_data)])
+
+    # Pagination buttons
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"studentquiz_ranked_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"studentquiz_ranked_{page + 1}"))
+        buttons.append(nav)
+
+    # Bottom button
+    buttons.append([InlineKeyboardButton(text=t("btn_practice_short", lang), callback_data="studentquiz_practice_0")])
+
+    if edit:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+async def show_student_practice_quizzes(message, user_id: int, mentor, lang: str, page: int = 0, edit: bool = False):
+    """Show practice quizzes for student with pagination (5 per page)"""
+    from bot.db import is_practice_mode
+
+    QUIZZES_PER_PAGE = 5
+
+    # Get all active quizzes
+    all_quizzes = await get_active_quizzes_by_mentor(mentor)
+    student = await get_student_by_telegram_id(user_id)
+
+    # Filter practice quizzes
+    practice_quizzes = [quiz for quiz in all_quizzes if is_practice_mode(quiz)]
+
+    if not practice_quizzes:
+        text = t("practice_quizzes_header", lang) + "\n\n" + t("no_practice_quizzes", lang)
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_ranked_quizzes", lang), callback_data="studentquiz_ranked_0")]
+        ]
+        if edit:
+            await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        else:
+            await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        return
+
+    # Calculate pagination
+    total_pages = (len(practice_quizzes) + QUIZZES_PER_PAGE - 1) // QUIZZES_PER_PAGE
+    start_idx = page * QUIZZES_PER_PAGE
+    end_idx = start_idx + QUIZZES_PER_PAGE
+    page_quizzes = practice_quizzes[start_idx:end_idx]
+
+    # Build text
+    text = t("practice_quizzes_header", lang) + "\n\n"
+    if total_pages > 1:
+        text += t("pagination_info", lang, page=page + 1, total=total_pages, count=len(practice_quizzes)) + "\n\n"
+
+    # Build buttons
+    buttons = []
+    for quiz in page_quizzes:
         attempt = await get_student_attempt(student, quiz)
         if attempt and attempt.finished_at:
             # Already completed - show score and allow retake
-            text = f"✅ {quiz.title} — {attempt.score}/{attempt.total}"
-            callback = f"viewquiz_{quiz.id}"
+            btn_text = f"✅ {quiz.title} — {attempt.score}/{attempt.total}"
+            callback_data = f"viewquiz_{quiz.id}"
         else:
             # Not attempted yet
-            text = f"📝 {quiz.title} — {t('quiz_not_attempted', lang)}"
-            callback = f"startquiz_{quiz.id}"
-        buttons.append([InlineKeyboardButton(text=text, callback_data=callback)])
+            btn_text = f"📚 {quiz.title}"
+            callback_data = f"startquiz_{quiz.id}"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=callback_data)])
 
-    await message.answer(t("select_quiz", lang), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    # Pagination buttons
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"studentquiz_practice_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"studentquiz_practice_{page + 1}"))
+        buttons.append(nav)
+
+    # Bottom button
+    buttons.append([InlineKeyboardButton(text=t("btn_ranked_short", lang), callback_data="studentquiz_ranked_0")])
+
+    if edit:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+async def show_student_quizzes(message: Message, mentor, lang: str):
+    """Legacy function - redirects to new menu"""
+    # This is kept for backward compatibility
+    buttons = [
+        [InlineKeyboardButton(text=t("btn_ranked_quizzes", lang), callback_data="studentquiz_ranked_0")],
+        [InlineKeyboardButton(text=t("btn_practice_quizzes", lang), callback_data="studentquiz_practice_0")]
+    ]
+    await message.answer(
+        t("quiz_student_header", lang),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
 
 
 # ==================== MENTOR: UPLOAD QUIZ ====================
@@ -264,14 +702,14 @@ async def receive_quiz_file(message: Message, state: FSMContext, bot: Bot):
     title = parsed.get("title") or message.document.file_name.replace(".txt", "")
 
     await state.set_state(QuizStates.waiting_quiz_confirm)
-    await state.update_data(parsed=parsed, title=title, topic=parsed.get("topic"))
+    await state.update_data(parsed=parsed, title=title, topic=parsed.get("topic"), replace_mode=None)
 
     preview_text = build_quiz_preview_text(parsed, title, lang)
 
     if await quiz_title_exists(mentor, title):
         buttons = [
-            [InlineKeyboardButton(text=t("btn_replace_quiz", lang), callback_data="quizsave_replace")],
-            [InlineKeyboardButton(text=t("btn_copy_quiz", lang), callback_data="quizsave_copy")],
+            [InlineKeyboardButton(text=t("btn_replace_quiz", lang), callback_data="quizconfirm_replace")],
+            [InlineKeyboardButton(text=t("btn_copy_quiz", lang), callback_data="quizconfirm_copy")],
             [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
         ]
         await message.answer(
@@ -282,17 +720,60 @@ async def receive_quiz_file(message: Message, state: FSMContext, bot: Bot):
         return
 
     buttons = [
-        [InlineKeyboardButton(text=t("btn_save_quiz", lang), callback_data="quizsave")],
+        [InlineKeyboardButton(text=t("btn_save_quiz", lang), callback_data="quizconfirm_continue")],
         [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
     ]
     await message.answer(preview_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
 
-async def save_quiz_from_state(callback: CallbackQuery, state: FSMContext, lang: str, mode: str):
+@router.callback_query(F.data == "quizconfirm_continue")
+async def quiz_confirm_continue(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await show_publish_mode_selection(callback, state, lang)
+
+
+@router.callback_query(F.data == "quizconfirm_replace")
+async def quiz_confirm_replace(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await state.update_data(replace_mode="replace")
+    await show_publish_mode_selection(callback, state, lang)
+
+
+@router.callback_query(F.data == "quizconfirm_copy")
+async def quiz_confirm_copy(callback: CallbackQuery, state: FSMContext):
+    lang = await get_user_language(callback.from_user.id)
+    await state.update_data(replace_mode="copy")
+    await show_publish_mode_selection(callback, state, lang)
+
+
+async def show_publish_mode_selection(callback: CallbackQuery, state: FSMContext, lang: str):
+    """Show publish mode selection menu"""
+    await state.set_state(QuizStates.waiting_publish_mode)
+
+    buttons = [
+        [InlineKeyboardButton(text=t("btn_publish_practice", lang), callback_data="quizpublish_practice")],
+        [InlineKeyboardButton(text=t("btn_publish_ranked", lang), callback_data="quizpublish_ranked")],
+        [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
+    ]
+
+    await callback.message.edit_text(
+        t("choose_publish_mode", lang),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "quizpublish_practice")
+async def quiz_publish_practice(callback: CallbackQuery, state: FSMContext):
+    """Publish quiz as practice mode"""
+    lang = await get_user_language(callback.from_user.id)
+
     data = await state.get_data()
     parsed = data.get("parsed")
     title = data.get("title")
     topic = data.get("topic")
+    replace_mode = data.get("replace_mode")
 
     if not parsed or not title:
         await state.clear()
@@ -305,12 +786,24 @@ async def save_quiz_from_state(callback: CallbackQuery, state: FSMContext, lang:
         await callback.answer(t("error", lang))
         return
 
-    if mode == "replace":
+    # Handle replace/copy mode
+    if replace_mode == "replace":
         await archive_quizzes_by_title(mentor, title)
-    elif mode == "copy":
+    elif replace_mode == "copy":
         title = await ensure_unique_quiz_title(mentor, title)
 
-    quiz = await create_quiz(mentor, title, topic)
+    # Create practice quiz
+    from bot.db import Quiz
+    quiz = Quiz(
+        mentor=mentor,
+        title=title,
+        topic=topic,
+        quiz_type='practice',
+        max_attempts=999,  # unlimited
+        is_active=True
+    )
+    await sync_to_async(quiz.save)()
+
     for i, q in enumerate(parsed["questions"], 1):
         await create_quiz_question(
             quiz=quiz,
@@ -325,29 +818,184 @@ async def save_quiz_from_state(callback: CallbackQuery, state: FSMContext, lang:
 
     await state.clear()
     await callback.message.edit_text(
-        t("quiz_uploaded", lang, title=title, count=len(parsed["questions"])),
+        t("quiz_published_practice", lang, title=title),
         parse_mode="HTML"
     )
     await callback.message.answer(t("quiz_ready_actions", lang), reply_markup=mentor_menu(lang))
     await callback.answer()
 
 
-@router.callback_query(F.data == "quizsave")
-async def quiz_save(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "quizpublish_ranked")
+async def quiz_publish_ranked_ask_time(callback: CallbackQuery, state: FSMContext):
+    """Ask when to start ranked quiz"""
     lang = await get_user_language(callback.from_user.id)
-    await save_quiz_from_state(callback, state, lang, mode="save")
+
+    buttons = [
+        [InlineKeyboardButton(text=t("btn_start_now", lang), callback_data="quizranked_now")],
+        [InlineKeyboardButton(text=t("btn_schedule_start", lang), callback_data="quizranked_schedule")],
+        [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
+    ]
+
+    await callback.message.edit_text(
+        t("choose_ranked_start", lang),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
 
 
-@router.callback_query(F.data == "quizsave_replace")
-async def quiz_save_replace(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "quizranked_now")
+async def quiz_ranked_start_now(callback: CallbackQuery, state: FSMContext):
+    """Start ranked quiz now (48 hours window)"""
+    from django.utils import timezone
+    from datetime import timedelta
+
     lang = await get_user_language(callback.from_user.id)
-    await save_quiz_from_state(callback, state, lang, mode="replace")
+    now = timezone.now()
+
+    await state.update_data(
+        available_from=now,
+        available_until=now + timedelta(hours=48)
+    )
+
+    await save_ranked_quiz(callback, state, lang)
 
 
-@router.callback_query(F.data == "quizsave_copy")
-async def quiz_save_copy(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "quizranked_schedule")
+async def quiz_ranked_schedule(callback: CallbackQuery, state: FSMContext):
+    """Ask for custom start time"""
     lang = await get_user_language(callback.from_user.id)
-    await save_quiz_from_state(callback, state, lang, mode="copy")
+
+    await state.set_state(QuizStates.waiting_ranked_start_time)
+    await callback.message.edit_text(
+        t("enter_ranked_start_time", lang),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.message(QuizStates.waiting_ranked_start_time)
+async def quiz_ranked_receive_start_time(message: Message, state: FSMContext):
+    """Receive and parse custom start time"""
+    from datetime import datetime, timedelta
+    from django.utils import timezone
+
+    lang = await get_user_language(message.from_user.id)
+
+    # Parse format: DD.MM HH:MM
+    try:
+        # Get current year
+        current_year = datetime.now().year
+
+        # Parse input
+        dt_str = message.text.strip()
+        dt_naive = datetime.strptime(f"{dt_str} {current_year}", "%d.%m %H:%M %Y")
+
+        # Make timezone aware using Django's make_aware (uses settings.TIME_ZONE)
+        available_from = timezone.make_aware(dt_naive)
+        available_until = available_from + timedelta(hours=48)
+
+        # Check if in the past
+        if available_from < timezone.now():
+            await message.answer(t("invalid_datetime_format", lang), parse_mode="HTML")
+            return
+
+        await state.update_data(
+            available_from=available_from,
+            available_until=available_until
+        )
+
+        # Create fake callback for save function
+        from aiogram.types import CallbackQuery as CB
+        fake_callback = type('obj', (object,), {
+            'message': message,
+            'from_user': message.from_user,
+            'answer': lambda *args, **kwargs: None
+        })()
+
+        await save_ranked_quiz(fake_callback, state, lang, edit=False)
+
+    except ValueError:
+        await message.answer(t("invalid_datetime_format", lang), parse_mode="HTML")
+
+
+async def save_ranked_quiz(callback, state: FSMContext, lang: str, edit: bool = True):
+    """Save ranked quiz with scheduling"""
+    from asgiref.sync import sync_to_async
+
+    data = await state.get_data()
+    parsed = data.get("parsed")
+    title = data.get("title")
+    topic = data.get("topic")
+    replace_mode = data.get("replace_mode")
+    available_from = data.get("available_from")
+    available_until = data.get("available_until")
+
+    if not parsed or not title:
+        await state.clear()
+        if hasattr(callback, 'answer'):
+            await callback.answer(t("error", lang))
+        return
+
+    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
+    if not mentor:
+        await state.clear()
+        if hasattr(callback, 'answer'):
+            await callback.answer(t("error", lang))
+        return
+
+    # Handle replace/copy mode
+    if replace_mode == "replace":
+        await archive_quizzes_by_title(mentor, title)
+    elif replace_mode == "copy":
+        title = await ensure_unique_quiz_title(mentor, title)
+
+    # Create ranked quiz
+    from bot.db import Quiz
+    quiz = Quiz(
+        mentor=mentor,
+        title=title,
+        topic=topic,
+        quiz_type='ranked',
+        max_attempts=1,
+        available_from=available_from,
+        available_until=available_until,
+        is_active=True
+    )
+    await sync_to_async(quiz.save)()
+
+    for i, q in enumerate(parsed["questions"], 1):
+        await create_quiz_question(
+            quiz=quiz,
+            question_text=q["text"],
+            option_a=q["option_a"],
+            option_b=q["option_b"],
+            option_c=q["option_c"],
+            option_d=q["option_d"],
+            correct_answer=q["correct"],
+            order=i
+        )
+
+    await state.clear()
+
+    # Format dates for display (convert to local timezone)
+    from django.utils import timezone as django_tz
+    local_start = django_tz.localtime(available_from)
+    local_end = django_tz.localtime(available_until)
+    start_str = local_start.strftime("%d.%m %H:%M")
+    end_str = local_end.strftime("%d.%m %H:%M")
+
+    result_text = t("quiz_scheduled", lang, title=title, start=start_str, end=end_str)
+
+    if edit and hasattr(callback.message, 'edit_text'):
+        await callback.message.edit_text(result_text, parse_mode="HTML")
+    else:
+        await callback.message.answer(result_text, parse_mode="HTML")
+
+    await callback.message.answer(t("quiz_ready_actions", lang), reply_markup=mentor_menu(lang))
+
+    if hasattr(callback, 'answer'):
+        await callback.answer()
 
 
 @router.callback_query(F.data == "quizcancel")
@@ -401,31 +1049,114 @@ async def manage_quiz(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("quizpage_"))
+async def quiz_page_navigation(callback: CallbackQuery):
+    """Handle pagination for archived quizzes"""
+    if not await is_mentor(callback.from_user.id):
+        return
+
+    lang = await get_user_language(callback.from_user.id)
+    page = int(callback.data.replace("quizpage_", ""))
+
+    await show_mentor_quizzes_edit(callback.message, lang, page)
+    await callback.answer()
+
+
+async def show_mentor_quizzes_edit(message, lang: str, page: int = 0):
+    """Show mentor quizzes with pagination - for editing existing message"""
+    QUIZZES_PER_PAGE = 5
+
+    mentor = await get_mentor_by_telegram_id(message.chat.id)
+    all_quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
+
+    # Separate active and archived
+    active_quizzes = [q for q in all_quizzes if q.is_active]
+    archived_quizzes = [q for q in all_quizzes if not q.is_active]
+
+    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in all_quizzes])
+
+    # Build text
+    text = ""
+    buttons = []
+
+    # Active quizzes section
+    if active_quizzes:
+        text += "📝 <b>Активные квизы</b>\n\n"
+        for quiz in active_quizzes[:QUIZZES_PER_PAGE]:
+            stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+
+            # Add badge based on quiz type
+            if hasattr(quiz, 'quiz_type'):
+                if quiz.quiz_type == 'ranked':
+                    badge = "🏆"
+                else:
+                    badge = "📚"
+            else:
+                badge = "📝"
+
+            buttons.append([InlineKeyboardButton(
+                text=f"{badge} {quiz.title} • {stats['questions']} вопр. • {stats['attempts']} попыток",
+                callback_data=f"quizmanage_{quiz.id}"
+            )])
+
+        if len(active_quizzes) > QUIZZES_PER_PAGE:
+            text += f"\n<i>Показано {min(QUIZZES_PER_PAGE, len(active_quizzes))} из {len(active_quizzes)}</i>\n"
+    else:
+        text += "📝 <b>Активные квизы</b>\n\n"
+        text += "📭 Активных квизов пока нет.\n"
+
+    # Archived quizzes section
+    text += "\n🗄️ <b>Архивированные квизы</b>\n\n"
+    if archived_quizzes:
+        # Calculate pagination for archived
+        start_idx = page * QUIZZES_PER_PAGE
+        end_idx = start_idx + QUIZZES_PER_PAGE
+        page_archived = archived_quizzes[start_idx:end_idx]
+        total_pages = (len(archived_quizzes) + QUIZZES_PER_PAGE - 1) // QUIZZES_PER_PAGE
+
+        for quiz in page_archived:
+            stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
+            buttons.append([InlineKeyboardButton(
+                text=f"🗄️ {quiz.title} • {stats['questions']} вопр. • {stats['attempts']} попыток",
+                callback_data=f"quizmanage_{quiz.id}"
+            )])
+
+        if total_pages > 1:
+            text += f"<i>Страница {page + 1}/{total_pages}</i>\n"
+
+            # Pagination buttons for archived
+            nav = []
+            if page > 0:
+                nav.append(InlineKeyboardButton(text="◀️", callback_data=f"quizpage_{page - 1}"))
+            nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+            if page < total_pages - 1:
+                nav.append(InlineKeyboardButton(text="▶️", callback_data=f"quizpage_{page + 1}"))
+            if nav:
+                buttons.append(nav)
+    else:
+        text += "<i>Нет архивированных квизов</i>\n"
+
+    # Upload button
+    buttons.append([InlineKeyboardButton(text="📤 Загрузить квиз", callback_data="upload_quiz")])
+
+    await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
 @router.callback_query(F.data == "back_quizzes")
 async def back_to_quizzes(callback: CallbackQuery):
     lang = await get_user_language(callback.from_user.id)
     if await is_mentor(callback.from_user.id):
-        mentor = await get_mentor_by_telegram_id(callback.from_user.id)
-        quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
-        stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in quizzes])
-
-        buttons = []
-        for quiz in quizzes:
-            stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
-            title = quiz.title if quiz.is_active else f"рџ—„пёЏ {quiz.title}"
-            buttons.append([InlineKeyboardButton(
-                text=t("quiz_item_mentor", lang, title=title, questions=stats['questions'], attempts=stats['attempts']),
-                callback_data=f"quizmanage_{quiz.id}"
-            )])
-
-        buttons.append([InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")])
-
-        if not quizzes:
-            text = t("no_quizzes", lang)
-        else:
-            text = t("quiz_mentor_list", lang)
-
-        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        # Show choice menu
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_active_quizzes", lang), callback_data="quizlist_active_0")],
+            [InlineKeyboardButton(text=t("btn_archived_quizzes", lang), callback_data="quizlist_archived_0")],
+            [InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")]
+        ]
+        await callback.message.edit_text(
+            t("quiz_management_header", lang),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML"
+        )
     await callback.answer()
 
 
@@ -468,28 +1199,8 @@ async def delete_quiz_confirmed(callback: CallbackQuery):
     await set_quiz_active(quiz_id, False)
     await callback.answer(t("quiz_archived", lang))
 
-    # Show updated list
-    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
-    quizzes = await get_quizzes_by_mentor(mentor, include_inactive=True)
-    stats_map = await get_quiz_stats_by_ids([quiz.id for quiz in quizzes])
-
-    buttons = []
-    for quiz in quizzes:
-        stats = stats_map.get(quiz.id, {'questions': 0, 'attempts': 0, 'avg': 0})
-        title = quiz.title if quiz.is_active else f"рџ—„пёЏ {quiz.title}"
-        buttons.append([InlineKeyboardButton(
-            text=t("quiz_item_mentor", lang, title=title, questions=stats['questions'], attempts=stats['attempts']),
-            callback_data=f"quizmanage_{quiz.id}"
-        )])
-
-    buttons.append([InlineKeyboardButton(text=t("btn_upload_quiz", lang), callback_data="upload_quiz")])
-
-    if not quizzes:
-        text = t("no_quizzes", lang)
-    else:
-        text = t("quiz_mentor_list", lang)
-
-    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    # Return to active quizzes list
+    await show_active_quizzes(callback.message, callback.from_user.id, lang, page=0, edit=True)
 
 
 @router.callback_query(F.data.startswith("quiztoggle_"))
@@ -947,6 +1658,7 @@ async def export_quiz_results(callback: CallbackQuery, bot: Bot):
     writer.writerow([
         "quiz_title",
         "student_telegram_id",
+        "full_name",
         "username",
         "first_name",
         "last_name",
@@ -961,6 +1673,7 @@ async def export_quiz_results(callback: CallbackQuery, bot: Bot):
         writer.writerow([
             quiz.title,
             student.telegram_id,
+            student.full_name or "",
             student.username or "",
             student.first_name or "",
             student.last_name or "",
@@ -984,6 +1697,8 @@ async def export_quiz_results(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data.startswith("viewquiz_"))
 async def view_quiz_attempt(callback: CallbackQuery):
+    from bot.db import is_exam_mode, is_practice_mode
+
     lang = await get_user_language(callback.from_user.id)
     quiz_id = int(callback.data.replace("viewquiz_", ""))
     quiz = await get_quiz_by_id(quiz_id)
@@ -999,17 +1714,32 @@ async def view_quiz_attempt(callback: CallbackQuery):
         await callback.answer(t("error", lang))
         return
 
-    # Show result with options to view answers or retake quiz
-    buttons = [
-        [InlineKeyboardButton(text=t("quiz_view_answers", lang), callback_data=f"reviewquiz_{attempt.id}")],
-        [InlineKeyboardButton(text=t("quiz_retake", lang), callback_data=f"startquiz_{quiz_id}")]
-    ]
+    # Build buttons based on quiz mode
+    buttons = []
 
-    await callback.message.edit_text(
-        t("quiz_already_taken", lang, score=attempt.score, total=attempt.total),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-        parse_mode="HTML"
-    )
+    # Show "View answers" button only in practice mode
+    if is_practice_mode(quiz):
+        buttons.append([InlineKeyboardButton(text=t("quiz_view_answers", lang), callback_data=f"reviewquiz_{attempt.id}")])
+
+    # Show "Retake" button only in practice mode (unlimited attempts)
+    if is_practice_mode(quiz):
+        buttons.append([InlineKeyboardButton(text=t("quiz_retake", lang), callback_data=f"startquiz_{quiz_id}")])
+
+    # Show appropriate result message
+    if is_exam_mode(quiz):
+        result_text = t("quiz_exam_mode_result", lang, score=attempt.score, total=attempt.total)
+    else:
+        result_text = t("quiz_already_taken", lang, score=attempt.score, total=attempt.total)
+
+    if buttons:
+        await callback.message.edit_text(
+            result_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML"
+        )
+    else:
+        await callback.message.edit_text(result_text, parse_mode="HTML")
+
     await callback.answer()
 
 
@@ -1019,8 +1749,79 @@ async def noop_handler(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("leaderpage_"))
+async def leaderboard_page_handler(callback: CallbackQuery):
+    """Handle mentor leaderboard pagination"""
+    lang = await get_user_language(callback.from_user.id)
+
+    # Check if mentor
+    if not await is_mentor(callback.from_user.id):
+        await callback.answer(t("error", lang))
+        return
+
+    # Extract page number
+    page = int(callback.data.replace("leaderpage_", ""))
+
+    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
+    if not mentor:
+        await callback.answer(t("error", lang))
+        return
+
+    # Get ALL students for mentor (no limit)
+    leaderboard = await get_global_leaderboard(mentor, limit=10000)
+
+    if not leaderboard:
+        await callback.message.edit_text(t("leaderboard_empty", lang))
+        return
+
+    # Calculate pagination
+    total_students = len(leaderboard)
+    total_pages = (total_students + LEADERBOARD_PER_PAGE - 1) // LEADERBOARD_PER_PAGE or 1
+
+    # Ensure page is within bounds
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * LEADERBOARD_PER_PAGE
+    end = start + LEADERBOARD_PER_PAGE
+    page_leaderboard = leaderboard[start:end]
+
+    # Build leaderboard text with real names
+    text = t("leaderboard_mentor_title", lang)
+    text += f"<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
+
+    for i, (student, rating_score, avg_percentage, total_quizzes) in enumerate(page_leaderboard, start=start + 1):
+        # Show real student name for mentor
+        student_name = str(student)  # Uses Student.__str__() method
+        text += t("leaderboard_mentor_entry", lang,
+                 rank=i,
+                 name=escape_html(student_name),
+                 score=rating_score,
+                 percentage=avg_percentage,
+                 quizzes=total_quizzes)
+
+    text += t("leaderboard_footer", lang)
+
+    # Build pagination keyboard
+    buttons = []
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{page + 1}"))
+        buttons.append(nav)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("reviewquiz_"))
 async def review_quiz_answers(callback: CallbackQuery):
+    from bot.db import is_exam_mode
+
     lang = await get_user_language(callback.from_user.id)
     parts = callback.data.split("_")
     attempt_id = int(parts[1])
@@ -1032,7 +1833,20 @@ async def review_quiz_answers(callback: CallbackQuery):
         await callback.answer(t("error", lang))
         return
 
-    # Build review text for current page
+    quiz = await get_quiz_by_id(attempt.quiz_id)
+    if not quiz:
+        await callback.answer(t("error", lang))
+        return
+
+    # Check if quiz is in exam mode
+    if is_exam_mode(quiz):
+        # Exam mode: don't show correct answers
+        text = t("quiz_exam_mode_result", lang, score=attempt.score, total=attempt.total)
+        await callback.message.edit_text(text, parse_mode="HTML")
+        await callback.answer()
+        return
+
+    # Practice mode: show review with correct answers
     answers = await get_attempt_answers(attempt)
     review_text, total_pages = build_review_text(answers, page, lang)
 
@@ -1060,6 +1874,8 @@ async def review_quiz_answers(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("startquiz_"))
 async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    from bot.db import can_attempt_quiz
+
     lang = await get_user_language(callback.from_user.id)
     quiz_id = int(callback.data.replace("startquiz_", ""))
     quiz = await get_quiz_by_id(quiz_id)
@@ -1073,7 +1889,30 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer(t("error", lang))
         return
 
-    # Create new attempt (allow multiple attempts)
+    # Check if student can attempt this quiz
+    can_attempt, reason = await can_attempt_quiz(student, quiz)
+    if not can_attempt:
+        # Show error message based on reason
+        if reason == "quiz_not_started":
+            from django.utils import timezone
+            if quiz.available_from:
+                local_start = timezone.localtime(quiz.available_from)
+                start_str = local_start.strftime("%d.%m %H:%M")
+            else:
+                start_str = "?"
+            error_text = t("quiz_not_started", lang, start=start_str)
+        elif reason == "quiz_expired":
+            error_text = t("quiz_expired", lang)
+        elif reason == "quiz_max_attempts":
+            error_text = t("quiz_max_attempts", lang)
+        else:
+            error_text = t("error", lang)
+
+        await callback.message.edit_text(error_text, parse_mode="HTML")
+        await callback.answer()
+        return
+
+    # Create new attempt
     attempt = await create_quiz_attempt(student, quiz)
     questions = await get_questions_by_quiz(quiz)
 
@@ -1253,8 +2092,6 @@ async def question_timeout(message, attempt_id: int, question_id: int, current: 
         if current_index >= len(question_ids):
             # Quiz finished
             await finish_quiz_attempt(attempt_id, score)
-            quiz = await get_quiz_by_id(data["quiz_id"])
-            avg = await get_quiz_average_score(quiz)
 
             # Unpin quiz message
             pinned_chat_id = data.get("pinned_chat_id")
@@ -1278,21 +2115,11 @@ async def question_timeout(message, attempt_id: int, question_id: int, current: 
                 session_timers[attempt_id].cancel()
                 del session_timers[attempt_id]
 
-            # Build result with review (first page)
-            result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")
+            # Build result text based on quiz mode
+            result_text, buttons, show_review = await build_quiz_result_text(attempt_id, score, len(question_ids), lang)
 
-            answers = await get_attempt_answers(attempt)
-            review_text, total_pages = build_review_text(answers, 0, lang)
-            result_text += review_text
-
-            # Add pagination buttons if needed
-            buttons = []
-            if total_pages > 1:
-                nav = [
-                    InlineKeyboardButton(text=f"1/{total_pages}", callback_data="noop"),
-                    InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"reviewquiz_{attempt_id}_1")
-                ]
-                buttons.append(nav)
+            # Show result
+            if buttons:
                 await message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
             else:
                 await message.edit_text(result_text, parse_mode="HTML")
@@ -1357,8 +2184,6 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if current_index >= len(question_ids):
         # Quiz finished
         await finish_quiz_attempt(attempt_id, score)
-        quiz = await get_quiz_by_id(data["quiz_id"])
-        avg = await get_quiz_average_score(quiz)
 
         # Unpin quiz message
         pinned_chat_id = data.get("pinned_chat_id")
@@ -1375,22 +2200,11 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
             session_timers[attempt_id].cancel()
             del session_timers[attempt_id]
 
-        # Build result with review (first page)
-        result_text = t("quiz_finished", lang, score=score, total=len(question_ids), avg=f"{round(avg, 1)}/{len(question_ids)}")
+        # Build result text based on quiz mode
+        result_text, buttons, show_review = await build_quiz_result_text(attempt_id, score, len(question_ids), lang)
 
-        # Add review
-        answers = await get_attempt_answers(attempt)
-        review_text, total_pages = build_review_text(answers, 0, lang)
-        result_text += review_text
-
-        # Add pagination buttons if needed
-        buttons = []
-        if total_pages > 1:
-            nav = [
-                InlineKeyboardButton(text=f"1/{total_pages}", callback_data="noop"),
-                InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"reviewquiz_{attempt_id}_1")
-            ]
-            buttons.append(nav)
+        # Show result
+        if buttons:
             await callback.message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
         else:
             await callback.message.edit_text(result_text, parse_mode="HTML")
@@ -1410,7 +2224,7 @@ def get_animal_name(lang: str, index: int) -> str:
     animals = [
         "animal_fox", "animal_bear", "animal_eagle", "animal_wolf", "animal_lion",
         "animal_tiger", "animal_panda", "animal_koala", "animal_owl", "animal_shark",
-        "animal_cheetah", "animal_giraffe", "animal_elephant", "animal_rhino", "animal_kangaroo"
+        "animal_cheetah", "animal_giraffe", "animal_elephant", "animal_cat", "animal_kangaroo"
     ]
     # Use modulo to cycle through animals if we have more than 15 students
     animal_key = animals[index % len(animals)]
@@ -1487,28 +2301,40 @@ async def show_leaderboard(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-async def show_mentor_leaderboard(message: Message, lang: str):
-    """Show leaderboard for mentor with real student names"""
+async def show_mentor_leaderboard(message: Message, lang: str, page: int = 0):
+    """Show leaderboard for mentor with real student names and pagination"""
     mentor = await get_mentor_by_telegram_id(message.from_user.id)
     if not mentor:
         await message.answer(t("error", lang))
         return
 
-    # Get top 20 students for mentor
-    leaderboard = await get_global_leaderboard(mentor, limit=20)
+    # Get ALL students for mentor (no limit)
+    leaderboard = await get_global_leaderboard(mentor, limit=10000)
 
     if not leaderboard:
         await message.answer(t("leaderboard_empty", lang))
         return
 
+    # Calculate pagination
+    total_students = len(leaderboard)
+    total_pages = (total_students + LEADERBOARD_PER_PAGE - 1) // LEADERBOARD_PER_PAGE or 1
+
+    # Ensure page is within bounds
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * LEADERBOARD_PER_PAGE
+    end = start + LEADERBOARD_PER_PAGE
+    page_leaderboard = leaderboard[start:end]
+
     # Build leaderboard text with real names
     text = t("leaderboard_mentor_title", lang)
+    text += f"<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
 
-    for rank, (student, rating_score, avg_percentage, total_quizzes) in enumerate(leaderboard, 1):
+    for i, (student, rating_score, avg_percentage, total_quizzes) in enumerate(page_leaderboard, start=start + 1):
         # Show real student name for mentor
         student_name = str(student)  # Uses Student.__str__() method
         text += t("leaderboard_mentor_entry", lang,
-                 rank=rank,
+                 rank=i,
                  name=escape_html(student_name),
                  score=rating_score,
                  percentage=avg_percentage,
@@ -1516,4 +2342,16 @@ async def show_mentor_leaderboard(message: Message, lang: str):
 
     text += t("leaderboard_footer", lang)
 
-    await message.answer(text, parse_mode="HTML")
+    # Build pagination keyboard
+    buttons = []
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{page + 1}"))
+        buttons.append(nav)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    await message.answer(text, parse_mode="HTML", reply_markup=keyboard)
