@@ -10,7 +10,7 @@ mentor, created = Mentor.objects.get_or_create(
     telegram_id=5871171104,
     defaults={
         'name': 'Darkhan',
-        'group_chat_id': -1003873478948,
+        'group_chat_id': -1003686154949,
     }
 )
 
