@@ -20,7 +20,14 @@ DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 # Security: Restrict ALLOWED_HOSTS in production
 # Set ALLOWED_HOSTS environment variable with comma-separated domains
 # Example: ALLOWED_HOSTS=example.com,www.example.com
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if not DEBUG else ['*']
+if DEBUG:
+    ALLOWED_HOSTS = ['*']
+else:
+    allowed = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1')
+    ALLOWED_HOSTS = [h.strip() for h in allowed.split(',')]
+    # Auto-add Heroku domain if on Heroku
+    if 'DYNO' in os.environ:
+        ALLOWED_HOSTS.append('.herokuapp.com')
 
 INSTALLED_APPS = [
     'django.contrib.admin',
