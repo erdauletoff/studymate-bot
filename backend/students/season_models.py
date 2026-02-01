@@ -270,9 +270,16 @@ class SeasonRating(models.Model):
             return
 
         # Calculate metrics
+        from django.db.models import Sum
+
         self.total_ranked_quizzes = valid_attempts.values('quiz').distinct().count()
-        self.total_score = sum(a.score for a in valid_attempts)
-        self.total_possible = sum(a.total for a in valid_attempts)
+
+        aggregates = valid_attempts.aggregate(
+            total_score=Sum('score'),
+            total_possible=Sum('total')
+        )
+        self.total_score = aggregates['total_score'] or 0
+        self.total_possible = aggregates['total_possible'] or 0
 
         # Average percentage
         self.avg_percentage = (self.total_score / self.total_possible * 100) if self.total_possible > 0 else 0

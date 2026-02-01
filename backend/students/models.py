@@ -25,6 +25,9 @@ class Student(models.Model):
     class Meta:
         verbose_name = "Student"
         verbose_name_plural = "Students"
+        indexes = [
+            models.Index(fields=['mentor', 'joined_at']),
+        ]
 
     def __str__(self):
         if self.full_name:
@@ -42,7 +45,7 @@ class Student(models.Model):
         Calculate student's quiz statistics.
         Returns dict with: total_quizzes, total_ranked, total_practice, avg_score, best_score
         """
-        from django.db.models import Avg, Max
+        from django.db.models import Avg, Sum, Max
 
         # All finished attempts
         attempts = self.quiz_attempts.filter(finished_at__isnull=False)
@@ -55,6 +58,7 @@ class Student(models.Model):
                 'avg_score': 0,
                 'avg_percentage': 0,
                 'best_score': 0,
+                'best_total': 0,
                 'best_percentage': 0
             }
 
@@ -70,9 +74,13 @@ class Student(models.Model):
         # Calculate average score (raw score)
         avg_score = attempts.aggregate(avg=Avg('score'))['avg'] or 0
 
-        # Calculate average percentage
-        total_score = sum(a.score for a in attempts)
-        total_possible = sum(a.total for a in attempts)
+        # Calculate average percentage using DB aggregation
+        aggregates = attempts.aggregate(
+            total_score=Sum('score'),
+            total_possible=Sum('total')
+        )
+        total_score = aggregates['total_score'] or 0
+        total_possible = aggregates['total_possible'] or 0
         avg_percentage = round((total_score / total_possible * 100), 1) if total_possible > 0 else 0
 
         # Get best result

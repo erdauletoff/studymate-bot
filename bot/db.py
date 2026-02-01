@@ -467,8 +467,8 @@ def finish_quiz_attempt(attempt_id: int, score: int):
 
         # Update student's learning streak
         student = attempt.student
-        from datetime import date, timedelta
-        today = date.today()
+        from datetime import timedelta
+        today = timezone.localdate()  # Use timezone-aware date
 
         # If this is the first quiz ever
         if student.last_quiz_date is None:
@@ -552,8 +552,9 @@ def get_quiz_attempts(quiz):
 @sync_to_async
 def get_quiz_average_score(quiz):
     """Get average score from first attempts only"""
-    from django.db.models import Avg, Min
-    # Get IDs of first attempts for each student
+    from django.db.models import Avg, Min, Q
+
+    # Get first attempt time for each student
     first_attempts = QuizAttempt.objects.filter(
         quiz=quiz,
         finished_at__isnull=False
@@ -561,32 +562,29 @@ def get_quiz_average_score(quiz):
         first_started=Min('started_at')
     )
 
-    # Calculate average from first attempts only
-    first_attempt_ids = []
-    for fa in first_attempts:
-        attempt = QuizAttempt.objects.filter(
-            quiz=quiz,
-            student_id=fa['student_id'],
-            started_at=fa['first_started']
-        ).first()
-        if attempt:
-            first_attempt_ids.append(attempt.id)
-
-    if not first_attempt_ids:
+    if not first_attempts:
         return 0
 
+    # Build OR condition for all (student_id, started_at) pairs
+    conditions = Q()
+    for fa in first_attempts:
+        conditions |= Q(student_id=fa['student_id'], started_at=fa['first_started'])
+
+    # Single query to get all first attempts
     result = QuizAttempt.objects.filter(
-        id__in=first_attempt_ids
-    ).aggregate(avg_score=Avg('score'))
+        quiz=quiz,
+        finished_at__isnull=False
+    ).filter(conditions).aggregate(avg_score=Avg('score'))
+
     return result['avg_score'] or 0
 
 
 @sync_to_async
 def get_quiz_stats(quiz):
     """Get quiz statistics based on first attempts only"""
-    from django.db.models import Avg, Count, Min
+    from django.db.models import Avg, Count, Min, Q
 
-    # Get first attempts for each student
+    # Get first attempt time for each student
     first_attempts = QuizAttempt.objects.filter(
         quiz=quiz,
         finished_at__isnull=False
@@ -594,22 +592,18 @@ def get_quiz_stats(quiz):
         first_started=Min('started_at')
     )
 
-    # Get IDs of first attempts
-    first_attempt_ids = []
-    for fa in first_attempts:
-        attempt = QuizAttempt.objects.filter(
-            quiz=quiz,
-            student_id=fa['student_id'],
-            started_at=fa['first_started']
-        ).first()
-        if attempt:
-            first_attempt_ids.append(attempt.id)
-
     # Calculate stats from first attempts only
-    if first_attempt_ids:
+    if first_attempts:
+        # Build OR condition for all (student_id, started_at) pairs
+        conditions = Q()
+        for fa in first_attempts:
+            conditions |= Q(student_id=fa['student_id'], started_at=fa['first_started'])
+
+        # Single query to get stats from all first attempts
         attempt_stats = QuizAttempt.objects.filter(
-            id__in=first_attempt_ids
-        ).aggregate(
+            quiz=quiz,
+            finished_at__isnull=False
+        ).filter(conditions).aggregate(
             attempts=Count('id'),
             avg_score=Avg('score')
         )
@@ -636,7 +630,7 @@ def get_quiz_stats_by_ids(quiz_ids):
     if not quiz_ids:
         return {}
 
-    from django.db.models import Avg, Count, Min
+    from django.db.models import Avg, Count, Min, Q
 
     # Get first attempts for each student in each quiz
     first_attempts_data = QuizAttempt.objects.filter(
@@ -646,24 +640,26 @@ def get_quiz_stats_by_ids(quiz_ids):
         first_started=Min('started_at')
     )
 
-    # Get IDs of first attempts
-    first_attempt_ids = []
-    for fa in first_attempts_data:
-        attempt = QuizAttempt.objects.filter(
-            quiz_id=fa['quiz_id'],
-            student_id=fa['student_id'],
-            started_at=fa['first_started']
-        ).first()
-        if attempt:
-            first_attempt_ids.append(attempt.id)
+    # Build OR condition for all (quiz_id, student_id, started_at) tuples
+    if first_attempts_data:
+        conditions = Q()
+        for fa in first_attempts_data:
+            conditions |= Q(
+                quiz_id=fa['quiz_id'],
+                student_id=fa['student_id'],
+                started_at=fa['first_started']
+            )
 
-    # Calculate stats from first attempts only
-    attempt_rows = QuizAttempt.objects.filter(
-        id__in=first_attempt_ids
-    ).values('quiz_id').annotate(
-        attempts=Count('id'),
-        avg_score=Avg('score')
-    )
+        # Single query to get stats from all first attempts
+        attempt_rows = QuizAttempt.objects.filter(
+            quiz_id__in=quiz_ids,
+            finished_at__isnull=False
+        ).filter(conditions).values('quiz_id').annotate(
+            attempts=Count('id'),
+            avg_score=Avg('score')
+        )
+    else:
+        attempt_rows = []
 
     question_rows = QuizQuestion.objects.filter(
         quiz_id__in=quiz_ids
@@ -690,7 +686,7 @@ def get_quiz_stats_by_ids(quiz_ids):
 @sync_to_async
 def get_quiz_top_students(quiz, limit=5):
     """Get top students based on first attempts only"""
-    from django.db.models import Min
+    from django.db.models import Min, Q
 
     # Get first attempts for each student
     first_attempts_data = QuizAttempt.objects.filter(
@@ -700,21 +696,21 @@ def get_quiz_top_students(quiz, limit=5):
         first_started=Min('started_at')
     )
 
-    # Get first attempts
-    first_attempts = []
+    if not first_attempts_data:
+        return []
+
+    # Build OR condition for all (student_id, started_at) pairs
+    conditions = Q()
     for fa in first_attempts_data:
-        attempt = QuizAttempt.objects.filter(
-            quiz=quiz,
-            student_id=fa['student_id'],
-            started_at=fa['first_started']
-        ).select_related('student').first()
-        if attempt:
-            first_attempts.append(attempt)
+        conditions |= Q(student_id=fa['student_id'], started_at=fa['first_started'])
 
-    # Sort by score descending, then by time
-    first_attempts.sort(key=lambda a: (-a.score, a.finished_at))
+    # Single query to get all first attempts
+    first_attempts = QuizAttempt.objects.filter(
+        quiz=quiz,
+        finished_at__isnull=False
+    ).filter(conditions).select_related('student').order_by('-score', 'finished_at')[:limit]
 
-    return [(a.student, a.score, a.total) for a in first_attempts[:limit]]
+    return [(a.student, a.score, a.total) for a in first_attempts]
 
 
 @sync_to_async
@@ -775,33 +771,40 @@ def get_global_leaderboard(mentor, limit=10):
     Rating formula: avg_percentage × (1 + min(total_quizzes / 10, 1) × 0.5)
     This gives up to 50% bonus for activity (max at 10+ quizzes).
     """
-    from django.db.models import Q, F
-    from django.utils import timezone
+    from django.db.models import F
+    from collections import defaultdict
 
-    # Get all students of this mentor
-    students = Student.objects.filter(mentor=mentor)
+    # Get all valid ranked attempts in one query
+    valid_attempts = QuizAttempt.objects.filter(
+        quiz__mentor=mentor,
+        quiz__quiz_type='ranked',
+        finished_at__isnull=False,
+        quiz__available_until__isnull=False
+    ).filter(
+        started_at__lt=F('quiz__available_until')
+    ).select_related('student').values('student_id', 'quiz_id', 'score', 'total')
 
+    # Group by student
+    student_stats = defaultdict(lambda: {'quizzes': set(), 'total_score': 0, 'total_questions': 0})
+    for attempt in valid_attempts:
+        student_id = attempt['student_id']
+        student_stats[student_id]['quizzes'].add(attempt['quiz_id'])
+        student_stats[student_id]['total_score'] += attempt['score']
+        student_stats[student_id]['total_questions'] += attempt['total']
+
+    if not student_stats:
+        return []
+
+    # Get student objects
+    student_ids = list(student_stats.keys())
+    students_map = {s.id: s for s in Student.objects.filter(id__in=student_ids)}
+
+    # Calculate ratings
     results = []
-    for student in students:
-        # Get valid ranked attempts for this student
-        # Valid = quiz_type='ranked' AND started_at < available_until
-        valid_attempts = QuizAttempt.objects.filter(
-            student=student,
-            quiz__mentor=mentor,
-            quiz__quiz_type='ranked',
-            finished_at__isnull=False,
-            quiz__available_until__isnull=False  # Only quizzes with available_until set
-        ).filter(
-            started_at__lt=F('quiz__available_until')
-        )
-
-        if not valid_attempts.exists():
-            continue
-
-        # Calculate stats
-        total_quizzes = valid_attempts.values('quiz').distinct().count()
-        total_score = sum(a.score for a in valid_attempts)
-        total_questions = sum(a.total for a in valid_attempts)
+    for student_id, stats in student_stats.items():
+        total_quizzes = len(stats['quizzes'])
+        total_score = stats['total_score']
+        total_questions = stats['total_questions']
 
         if total_questions == 0:
             continue
@@ -810,7 +813,9 @@ def get_global_leaderboard(mentor, limit=10):
         activity_bonus = min(total_quizzes / 10.0, 1.0) * 0.5
         rating_score = round(avg_percentage * (1 + activity_bonus), 1)
 
-        results.append((student, rating_score, avg_percentage, total_quizzes))
+        student = students_map.get(student_id)
+        if student:
+            results.append((student, rating_score, avg_percentage, total_quizzes))
 
     # Sort by rating score descending
     results.sort(key=lambda x: (-x[1], -x[2], -x[3]))
@@ -888,30 +893,32 @@ def get_student_rank(student, mentor):
     Rating formula: avg_percentage × (1 + min(total_quizzes / 10, 1) × 0.5)
     """
     from django.db.models import F
+    from collections import defaultdict
 
-    # Get all students of this mentor
-    all_students = Student.objects.filter(mentor=mentor)
+    # Get all valid ranked attempts in one query
+    valid_attempts = QuizAttempt.objects.filter(
+        quiz__mentor=mentor,
+        quiz__quiz_type='ranked',
+        finished_at__isnull=False,
+        quiz__available_until__isnull=False
+    ).filter(
+        started_at__lt=F('quiz__available_until')
+    ).values('student_id', 'quiz_id', 'score', 'total')
 
+    # Group by student
+    student_stats = defaultdict(lambda: {'quizzes': set(), 'total_score': 0, 'total_questions': 0})
+    for attempt in valid_attempts:
+        student_id = attempt['student_id']
+        student_stats[student_id]['quizzes'].add(attempt['quiz_id'])
+        student_stats[student_id]['total_score'] += attempt['score']
+        student_stats[student_id]['total_questions'] += attempt['total']
+
+    # Calculate ratings
     student_data = []
-    for s in all_students:
-        # Get valid ranked attempts for this student
-        valid_attempts = QuizAttempt.objects.filter(
-            student=s,
-            quiz__mentor=mentor,
-            quiz__quiz_type='ranked',
-            finished_at__isnull=False,
-            quiz__available_until__isnull=False  # Only quizzes with available_until set
-        ).filter(
-            started_at__lt=F('quiz__available_until')
-        )
-
-        if not valid_attempts.exists():
-            continue
-
-        # Calculate stats
-        total_quizzes = valid_attempts.values('quiz').distinct().count()
-        total_score = sum(a.score for a in valid_attempts)
-        total_questions = sum(a.total for a in valid_attempts)
+    for student_id, stats in student_stats.items():
+        total_quizzes = len(stats['quizzes'])
+        total_score = stats['total_score']
+        total_questions = stats['total_questions']
 
         if total_questions == 0:
             continue
@@ -921,7 +928,7 @@ def get_student_rank(student, mentor):
         rating_score = round(avg_percentage * (1 + activity_bonus), 1)
 
         student_data.append({
-            'id': s.id,
+            'id': student_id,
             'rating_score': rating_score,
             'avg_percentage': avg_percentage,
             'total_quizzes': total_quizzes

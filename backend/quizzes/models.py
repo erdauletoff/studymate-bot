@@ -23,6 +23,11 @@ class Quiz(models.Model):
         verbose_name = "Quiz"
         verbose_name_plural = "Quizzes"
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['mentor', 'is_active', 'quiz_type']),
+            models.Index(fields=['quiz_type', 'available_until']),
+            models.Index(fields=['created_at']),
+        ]
 
     def __str__(self):
         return self.title
@@ -59,6 +64,11 @@ class QuizAttempt(models.Model):
         verbose_name = "Quiz Attempt"
         verbose_name_plural = "Quiz Attempts"
         ordering = ['-started_at']
+        indexes = [
+            models.Index(fields=['student', 'quiz']),
+            models.Index(fields=['quiz', 'finished_at']),
+            models.Index(fields=['finished_at']),
+        ]
 
     def __str__(self):
         return f"{self.student} - {self.quiz.title} ({self.score}/{self.total})"

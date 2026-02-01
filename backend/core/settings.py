@@ -7,10 +7,20 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+# Security: Require SECRET_KEY to be set in environment
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    raise ValueError(
+        "SECRET_KEY environment variable is required. "
+        "Generate one with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'"
+    )
+
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = ['*']
+# Security: Restrict ALLOWED_HOSTS in production
+# Set ALLOWED_HOSTS environment variable with comma-separated domains
+# Example: ALLOWED_HOSTS=example.com,www.example.com
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if not DEBUG else ['*']
 
 INSTALLED_APPS = [
     'django.contrib.admin',

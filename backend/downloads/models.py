@@ -11,6 +11,10 @@ class Download(models.Model):
     class Meta:
         verbose_name = "Download"
         verbose_name_plural = "Downloads"
+        indexes = [
+            models.Index(fields=['material', 'downloaded_at']),
+            models.Index(fields=['downloaded_at']),
+        ]
 
     def __str__(self):
         return f"{self.student} - {self.material.title}"

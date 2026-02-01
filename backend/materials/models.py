@@ -29,6 +29,9 @@ class Material(models.Model):
         verbose_name = "Material"
         verbose_name_plural = "Materials"
         ordering = ['order', 'created_at']
+        indexes = [
+            models.Index(fields=['topic', 'created_at']),
+        ]
 
     def __str__(self):
         return self.title

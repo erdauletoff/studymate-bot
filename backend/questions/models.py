@@ -14,6 +14,10 @@ class Question(models.Model):
         verbose_name = "Anonymous Question"
         verbose_name_plural = "Anonymous Questions"
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['mentor', 'is_answered']),
+            models.Index(fields=['created_at']),
+        ]
 
     def __str__(self):
         return f"{self.text[:50]}..."
