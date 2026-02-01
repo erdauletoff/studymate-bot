@@ -15,22 +15,44 @@ router = Router()
 
 
 async def check_group_membership(bot: Bot, user_id: int, group_chat_id: int) -> bool:
+    import logging
+    logger = logging.getLogger('studymate')
+
     try:
         member = await bot.get_chat_member(chat_id=group_chat_id, user_id=user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except Exception:
+        is_member = member.status in ['member', 'administrator', 'creator']
+
+        logger.info(
+            f"Group membership check: user_id={user_id}, "
+            f"group={group_chat_id}, status={member.status}, "
+            f"is_member={is_member}"
+        )
+
+        return is_member
+    except Exception as e:
+        logger.error(
+            f"Failed to check group membership: user_id={user_id}, "
+            f"group={group_chat_id}, error={type(e).__name__}: {str(e)}"
+        )
         return False
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=False):
+    import logging
+    logger = logging.getLogger('studymate')
+
     user_id = message.from_user.id
+    username = message.from_user.username or 'no_username'
     await state.clear()
-    
+
     lang = await get_user_language(user_id)
+
+    logger.info(f"/start command from user_id={user_id}, username=@{username}")
 
     if await is_mentor(user_id):
         mentor = await get_mentor_by_telegram_id(user_id)
+        logger.info(f"User {user_id} is a mentor: {mentor.name}")
         await message.answer(
             t("welcome_mentor", lang, name=mentor.name),
             reply_markup=mentor_menu(lang),
@@ -39,9 +61,17 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=Fal
         return
 
     mentors = await get_all_mentors()
+    logger.info(f"Checking {len(mentors)} mentors for user {user_id}")
 
     for mentor in mentors:
+        logger.info(
+            f"Checking if user {user_id} is in mentor {mentor.name}'s group "
+            f"(group_chat_id={mentor.group_chat_id})"
+        )
+
         if await check_group_membership(bot, user_id, mentor.group_chat_id):
+            logger.info(f"✅ User {user_id} found in group! Registering as student...")
+
             student = await get_or_create_student(
                 telegram_id=user_id,
                 username=message.from_user.username,
@@ -50,6 +80,8 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=Fal
                 language=lang
             )
             await assign_student_to_mentor(student, mentor)
+
+            logger.info(f"✅ Student {user_id} registered to mentor {mentor.name}")
 
             if is_cancel:
                 await message.answer(
@@ -64,6 +96,10 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=Fal
                 )
             return
 
+    logger.warning(
+        f"❌ Access denied for user {user_id} (@{username}) - "
+        f"not found in any mentor's group"
+    )
     await message.answer(t("access_denied", lang))
 
 

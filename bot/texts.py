@@ -298,7 +298,7 @@ TEXTS = {
 
         # ===== START =====
         "welcome_mentor": "👋 Xosh kelipsiz, {name}!\n\nSiz oqıw materialların júklewińiz hám basqarıwıńız múmkin.",
-        "welcome_student": "👋 StudyMate'ǵa xosh kelipsiz!\n\n📚 Mentorıńız: {name}\n\n<b>Bottıń imkaniyatlari</b>:\n📚 Oqıw materialları — fayllar hám dokumentlerdi júklep alıń\n📝 Kvizler — reytinglik hám praktikalıq testlerden ótiń\n❓ Sorawlar — mentorǵa anonim soraw beriń\n🏆 Reyting — nátiyjeleriń menen tanısıń",
+        "welcome_student": "👋 StudyMate'ǵa xosh kelipsiz!\n\n📚 Mentorıńız: {name}\n\n<b>Bottıń imkaniyatlari</b>:\n📚 Oqıw materialları — fayllar hám dokumentlerdi júklep alıń\n📝 Kvizler — reytinglik hám praktikalıq testlerden ótiń\n❓ Sorawlar — mentorǵa anonim soraw beriń\n🏆 Reyting — nátiyjelerińiz benen tanısıń",
         "access_denied": "⛔ Kiriw qadaǵan etilgen.\n\nSiz kurs toparınıń aǵzası bolıwıńız kerek.\nMentorińizǵa xabarlasıń.",
         
         # ===== MENU BUTTONS =====
@@ -318,7 +318,7 @@ TEXTS = {
         "materials_submenu_header": "📚 <b>Materiallar basqarıwı</b>\n\nÁmeldi tańlań:",
 
         # ===== STUDENT PROFILE =====
-        "profile_setup_welcome": "👋 <b>Xosh kelipsiz!</b>\n\n📝 Úlgeriw esabı ushın atıńız hám familiyańızdı kirgiziń.\n\nℹ️ <b>Mańızlı:</b>\n• Atıńızdı tek mentorıńız kóredi\n• Reytingde basqa oqıwshılar ushın siz anonim bolasız\n• Atıńızdı islegen waqıtta ózgertiw múmkin",
+        "profile_setup_welcome": "👋 <b>Xosh kelipsiz!</b>\n\n📝 Úlgeriw esabı ushın atıńız hám familiyańızdı kirgiziń.\n\nℹ️ <b>Mańızlı:</b>\n• Atıńızdı tek mentorıńız kóredi\n• Reytingde basqa oqıwshılar ushın siz anonim bolasız\n• Atıńızdı qalegen waqıtta ózgertiw múmkin",
         "profile_enter_fullname": "📝 Tolıq atıńızdı kirgiziń:\n\n<i>Kirillica yaki latinicada múmkin</i>",
         "profile_name_too_short": "❌ At juda qısqa. Keminde 3 hárip kirgiziń.",
         "profile_name_too_long": "❌ At juda uzın. Maqsimum 200 hárip.",
