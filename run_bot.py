@@ -62,23 +62,31 @@ async def main():
     if USE_REDIS:
         try:
             import ssl
+            from redis.asyncio import Redis
 
             # Configure SSL for Heroku Redis (uses self-signed certs)
-            ssl_context = None
-            if REDIS_URL.startswith('rediss://'):  # SSL Redis
+            if REDIS_URL.startswith('rediss://'):  # SSL Redis (Heroku)
+                logger.info("Configuring Redis with SSL for Heroku...")
+
+                # Create SSL context
                 ssl_context = ssl.create_default_context()
                 ssl_context.check_hostname = False
                 ssl_context.verify_mode = ssl.CERT_NONE
 
-            # Parse Redis URL and add SSL context if needed
-            if ssl_context:
-                from redis.asyncio import Redis
-                redis_client = Redis.from_url(REDIS_URL, ssl=ssl_context)
+                # Create Redis client with SSL
+                redis_client = Redis.from_url(
+                    REDIS_URL,
+                    ssl_cert_reqs=None,
+                    ssl_check_hostname=False,
+                    ssl_ca_certs=None
+                )
                 storage = RedisStorage(redis=redis_client)
+                logger.info("Using RedisStorage with SSL (Heroku)")
             else:
+                # Regular Redis without SSL
                 storage = RedisStorage.from_url(REDIS_URL)
+                logger.info(f"Using RedisStorage: {REDIS_URL}")
 
-            logger.info(f"Using RedisStorage: {REDIS_URL.split('@')[0]}@***")  # Hide credentials in logs
         except Exception as e:
             logger.error(f"Failed to connect to Redis: {e}")
             logger.warning("Falling back to MemoryStorage (not recommended for production!)")
