@@ -21,7 +21,7 @@ TEXTS = {
 
         # ===== START =====
         "welcome_mentor": "👋 Добро пожаловать, {name}!\n\nВы можете загружать и управлять учебными материалами.",
-        "welcome_student": "👋 Добро пожаловать в StudyMate!\n\n📚 Ваш ментор: {name}\n\n<b>Возможности бота:</b>\n📚 Учебные материалы — скачивайте файлы и документы\n📝 Квизы — проходите рейтинговые и практические тесты\n❓ Вопросы — задавайте вопросы ментору анонимно\n🏆 Рейтинг — следите за своими результатами\n👤 Профиль — управляйте настройками и статистикой",
+        "welcome_student": "👋 Добро пожаловать в StudyMate!\n\n📚 Ваш ментор: {name}\n\n<b>Возможности бота:</b>\n📚 Учебные материалы — скачивайте файлы и документы\n📝 Квизы — проходите рейтинговые и практические тесты\n❓ Вопросы — задавайте вопросы ментору анонимно\n🏆 Рейтинг — следите за своими результатами",
         "access_denied": "⛔ Доступ запрещён.\n\nВы должны быть участником группы курса.\nОбратитесь к вашему ментору.",
         
         # ===== MENU BUTTONS =====
@@ -41,7 +41,7 @@ TEXTS = {
         "materials_submenu_header": "📚 <b>Управление материалами</b>\n\nВыберите действие:",
 
         # ===== STUDENT PROFILE =====
-        "profile_setup_welcome": "👋 <b>Добро пожаловать!</b>\n\n📝 Для учета успеваемости введите ваше ФИО.\n\nℹ️ <b>Важно:</b>\n• Ваше имя увидит только ваш ментор\n• В рейтинге для других студентов вы останетесь анонимным\n• Вы сможете изменить ФИО в любой момент\n\n<b>Пример:</b> Иванов Иван Петрович",
+        "profile_setup_welcome": "👋 <b>Добро пожаловать!</b>\n\n📝 Для учета успеваемости введите ваше ФИО.\n\nℹ️ <b>Важно:</b>\n• Ваше имя увидит только ваш ментор\n• В рейтинге для других студентов вы останетесь анонимным\n• Вы сможете изменить ФИО в любой момент",
         "profile_enter_fullname": "📝 Введите ваше ФИО:\n\n<i>Можно на кириллице или латинице</i>",
         "profile_name_too_short": "❌ ФИО слишком короткое. Введите минимум 3 символа.",
         "profile_name_too_long": "❌ ФИО слишком длинное. Максимум 200 символов.",
@@ -318,7 +318,7 @@ TEXTS = {
         "materials_submenu_header": "📚 <b>Materiallar basqarıwı</b>\n\nÁmeldi tańlań:",
 
         # ===== STUDENT PROFILE =====
-        "profile_setup_welcome": "👋 <b>Xosh kelipsiz!</b>\n\n📝 Úlgeriw esabı ushın atıńız hám familiyańızdı kirgiziń.\n\nℹ️ <b>Mańızlı:</b>\n• Atıńızdı tek mentorıńız kóredi\n• Reytingde basqa oqıwshılar ushın siz anonim bolasız\n• Atıńızdı islegen waqıtta ózgertiw múmkin\n\n<b>Másel:</b> Ivanov Ivan Petrovich",
+        "profile_setup_welcome": "👋 <b>Xosh kelipsiz!</b>\n\n📝 Úlgeriw esabı ushın atıńız hám familiyańızdı kirgiziń.\n\nℹ️ <b>Mańızlı:</b>\n• Atıńızdı tek mentorıńız kóredi\n• Reytingde basqa oqıwshılar ushın siz anonim bolasız\n• Atıńızdı islegen waqıtta ózgertiw múmkin",
         "profile_enter_fullname": "📝 Tolıq atıńızdı kirgiziń:\n\n<i>Kirillica yaki latinicada múmkin</i>",
         "profile_name_too_short": "❌ At juda qısqa. Keminde 3 hárip kirgiziń.",
         "profile_name_too_long": "❌ At juda uzın. Maqsimum 200 hárip.",
@@ -575,7 +575,7 @@ TEXTS = {
 
         # ===== START =====
         "welcome_mentor": "👋 Welcome, {name}!\n\nYou can upload and manage lesson materials.",
-        "welcome_student": "👋 Welcome to StudyMate!\n\n📚 Your mentor: {name}\n\n<b>Bot features:</b>\n📚 Lesson materials — download files and documents\n📝 Quizzes — take ranked and practice tests\n❓ Questions — ask your mentor anonymously\n🏆 Leaderboard — track your results\n👤 Profile — manage settings and statistics",
+        "welcome_student": "👋 Welcome to StudyMate!\n\n📚 Your mentor: {name}\n\n<b>Bot features:</b>\n📚 Lesson materials — download files and documents\n📝 Quizzes — take ranked and practice tests\n❓ Questions — ask your mentor anonymously\n🏆 Leaderboard — track your results",
         "access_denied": "⛔ Access denied.\n\nYou must be a member of a course group.\nContact your mentor.",
         
         # ===== MENU BUTTONS =====
@@ -595,7 +595,7 @@ TEXTS = {
         "materials_submenu_header": "📚 <b>Materials Management</b>\n\nChoose an action:",
 
         # ===== STUDENT PROFILE =====
-        "profile_setup_welcome": "👋 <b>Welcome!</b>\n\n📝 Please enter your full name for academic tracking.\n\nℹ️ <b>Important:</b>\n• Only your mentor will see your name\n• You'll remain anonymous to other students in the leaderboard\n• You can change your name anytime\n\n<b>Example:</b> John Smith",
+        "profile_setup_welcome": "👋 <b>Welcome!</b>\n\n📝 Please enter your full name for academic tracking.\n\nℹ️ <b>Important:</b>\n• Only your mentor will see your name\n• You'll remain anonymous to other students in the leaderboard\n• You can change your name anytime",
         "profile_enter_fullname": "📝 Enter your full name:\n\n<i>You can use Cyrillic or Latin characters</i>",
         "profile_name_too_short": "❌ Name is too short. Please enter at least 3 characters.",
         "profile_name_too_long": "❌ Name is too long. Maximum 200 characters.",
@@ -831,7 +831,7 @@ TEXTS = {
     },
 }
 
-DEFAULT_LANG = "qq"
+DEFAULT_LANG = "ru"
 
 
 def t(key: str, lang: str = None, **kwargs) -> str:
