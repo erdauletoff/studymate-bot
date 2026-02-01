@@ -118,7 +118,10 @@ TEXTS = {
         # ===== ERRORS =====
         "error": "⚠️ Ошибка. Используйте /start",
         "not_assigned": "⚠️ Вы не привязаны к ментору. Используйте /start",
-        
+        "throttle_warning_1": "⏱ Пожалуйста, подождите немного перед следующим действием",
+        "throttle_warning_2": "⏱ Вы отправляете сообщения слишком быстро. Подождите немного.",
+        "throttle_warning_3": "⚠️ Пожалуйста, не спамьте. Подождите несколько секунд.",
+
         # ===== MANAGE FILES =====
         "btn_delete_topic": "🗑️ Удалить тему",
 
@@ -395,7 +398,10 @@ TEXTS = {
         # ===== ERRORS =====
         "error": "⚠️ Qátelik. /start buyrıgın paydalanıń",
         "not_assigned": "⚠️ Siz mentorǵa biriktirilmegensiz. /start buyrıgın paydalanıń",
-        
+        "throttle_warning_1": "⏱ Kelesi ámelden aldın kishkene kútiń",
+        "throttle_warning_2": "⏱ Xabarlardi juda tez jiberip atırsız. Kútiń.",
+        "throttle_warning_3": "⚠️ Spam etpeń. Bir nеshe sekund kútiń.",
+
         # ===== MANAGE FILES =====
         "btn_delete_topic": "🗑️ Temani óshiriw",
 
@@ -672,7 +678,10 @@ TEXTS = {
         # ===== ERRORS =====
         "error": "⚠️ Error. Use /start",
         "not_assigned": "⚠️ You are not assigned to a mentor. Use /start",
-        
+        "throttle_warning_1": "⏱ Please wait a bit before next action",
+        "throttle_warning_2": "⏱ You're sending messages too fast. Please wait.",
+        "throttle_warning_3": "⚠️ Please don't spam. Wait a few seconds.",
+
         # ===== MANAGE FILES =====
         "btn_delete_topic": "🗑️ Delete Topic",
 

@@ -6,7 +6,15 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 
 from bot.db import is_mentor, get_student_mentor, get_user_language
-from bot.texts import t
+from bot.texts import t, TEXTS
+
+
+def _all_localized_texts(key: str) -> set[str]:
+    return {texts[key] for texts in TEXTS.values() if key in texts}
+
+
+LANGUAGE_BUTTON_TEXTS = _all_localized_texts("btn_language")
+CANCEL_BUTTON_TEXTS = _all_localized_texts("btn_cancel")
 
 
 class StudentMentorCheckMiddleware(BaseMiddleware):
@@ -53,11 +61,11 @@ class StudentMentorCheckMiddleware(BaseMiddleware):
                 return await handler(event, data)
 
             # Allow language change buttons
-            if event.text and event.text in ["🌐 Язык", "🌐 Til", "🌐 Language"]:
+            if event.text and event.text in LANGUAGE_BUTTON_TEXTS:
                 return await handler(event, data)
 
             # Allow cancel buttons
-            if event.text and event.text in ["❌ Отмена", "❌ Biykar etiw", "❌ Cancel"]:
+            if event.text and event.text in CANCEL_BUTTON_TEXTS:
                 return await handler(event, data)
 
         # Allow language change callback
@@ -246,27 +254,8 @@ class ThrottlingMiddleware(BaseMiddleware):
 
     def _get_throttle_message(self, lang: str, violation_count: int) -> str:
         """Get appropriate throttle warning message"""
-        messages = {
-            'ru': [
-                "⏱ Пожалуйста, подождите немного перед следующим действием",
-                "⏱ Вы отправляете сообщения слишком быстро. Подождите немного.",
-                "⚠️ Пожалуйста, не спамьте. Подождите несколько секунд."
-            ],
-            'en': [
-                "⏱ Please wait a bit before next action",
-                "⏱ You're sending messages too fast. Please wait.",
-                "⚠️ Please don't spam. Wait a few seconds."
-            ],
-            'qq': [
-                "⏱ Kelesi ámelden aldın azırak kútiń",
-                "⏱ Xabarlar juda tez jiberip atırsız. Kútiń.",
-                "⚠️ Spam etpań. Bir nеshe sekund kútiń."
-            ]
-        }
-
-        lang_messages = messages.get(lang, messages['ru'])
-        idx = min(violation_count - 1, len(lang_messages) - 1)
-        return lang_messages[idx]
+        idx = min(violation_count, 3)
+        return t(f"throttle_warning_{idx}", lang)
 
     async def _cleanup_old_entries(self, now: float):
         """Remove old entries to prevent memory leak"""
