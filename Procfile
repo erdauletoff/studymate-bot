@@ -1,2 +1,2 @@
-web: gunicorn backend.core.wsgi:application --bind 0.0.0.0:$PORT
-bot: python run_bot.py
+release: python manage.py migrate --noinput
+worker: python run_bot.py

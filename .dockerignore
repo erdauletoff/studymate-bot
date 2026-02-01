@@ -5,9 +5,9 @@ __pycache__/
 db.sqlite3
 staticfiles/
 .idea/
-nul
+.git/
 logs/
 *.log
-backups/
-*.sql
-*.sql.gz
+.gitignore
+*.md
+!README.md

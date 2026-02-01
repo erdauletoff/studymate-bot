@@ -1,0 +1,44 @@
+[Unit]
+Description=StudyMate Telegram Bot
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=studymate
+Group=studymate
+WorkingDirectory=/opt/studymate-bot
+
+# Environment
+Environment="PATH=/opt/studymate-bot/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/opt/studymate-bot/.env
+
+# Pre-start: Run migrations
+ExecStartPre=/opt/studymate-bot/.venv/bin/python manage.py migrate --noinput
+
+# Start bot
+ExecStart=/opt/studymate-bot/.venv/bin/python run_bot.py
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Logging
+StandardOutput=append:/var/log/studymate-bot/bot.log
+StandardError=append:/var/log/studymate-bot/error.log
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/studymate-bot/logs /opt/studymate-bot/staticfiles
+
+# Resource limits (optional)
+# MemoryMax=1G
+# CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: studymate
+      POSTGRES_USER: studymate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studymate"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for FSM storage
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Telegram bot
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      SECRET_KEY: ${SECRET_KEY}
+      DEBUG: ${DEBUG:-False}
+      DATABASE_URL: postgresql://studymate:${POSTGRES_PASSWORD:-changeme}@postgres:5432/studymate
+      REDIS_URL: redis://redis:6379/0
+      USE_REDIS: "true"
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost}
+      ADMIN_TELEGRAM_IDS: ${ADMIN_TELEGRAM_IDS:-}
+    volumes:
+      - ./logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+  redis_data:
