@@ -854,8 +854,8 @@ async def quiz_ranked_start_now(callback: CallbackQuery, state: FSMContext, bot:
     now = timezone.now()
 
     await state.update_data(
-        available_from=now,
-        available_until=now + timedelta(hours=48)
+        available_from=now.isoformat(),
+        available_until=(now + timedelta(hours=48)).isoformat()
     )
 
     await save_ranked_quiz(callback, state, lang, bot)
@@ -901,8 +901,8 @@ async def quiz_ranked_receive_start_time(message: Message, state: FSMContext, bo
             return
 
         await state.update_data(
-            available_from=available_from,
-            available_until=available_until
+            available_from=available_from.isoformat(),
+            available_until=available_until.isoformat()
         )
 
         # Create fake callback for save function
@@ -922,14 +922,19 @@ async def quiz_ranked_receive_start_time(message: Message, state: FSMContext, bo
 async def save_ranked_quiz(callback, state: FSMContext, lang: str, bot: Bot, edit: bool = True):
     """Save ranked quiz with scheduling"""
     from asgiref.sync import sync_to_async
+    from datetime import datetime
 
     data = await state.get_data()
     parsed = data.get("parsed")
     title = data.get("title")
     topic = data.get("topic")
     replace_mode = data.get("replace_mode")
-    available_from = data.get("available_from")
-    available_until = data.get("available_until")
+    available_from_str = data.get("available_from")
+    available_until_str = data.get("available_until")
+
+    # Parse ISO format strings back to datetime
+    available_from = datetime.fromisoformat(available_from_str) if available_from_str else None
+    available_until = datetime.fromisoformat(available_until_str) if available_until_str else None
 
     if not parsed or not title:
         await state.clear()

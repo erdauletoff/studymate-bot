@@ -19,7 +19,8 @@
       "Bash(timeout 5 python:*)",
       "Bash(python manage.py shell:*)",
       "Bash(python:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(cd:*)"
     ]
   }
 }
