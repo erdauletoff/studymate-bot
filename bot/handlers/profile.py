@@ -132,6 +132,14 @@ async def view_profile(message: Message, state: FSMContext):
         await message.answer(t("error", lang))
         return
 
+    # Check if profile is completed
+    profile_completed = await is_student_profile_completed(message.from_user.id)
+
+    if not profile_completed:
+        # Start profile setup if not completed
+        await start_profile_setup(message, state, lang)
+        return
+
     # Get mentor info
     mentor = await get_student_mentor(message.from_user.id)
     mentor_name = mentor.name if mentor else t("profile_not_set", lang)

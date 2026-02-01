@@ -33,7 +33,8 @@ async def back_to_main_menu(message: Message, state: FSMContext):
     mentor = await get_mentor_by_telegram_id(message.from_user.id)
     await message.answer(
         t("welcome_mentor", lang, name=mentor.name),
-        reply_markup=mentor_menu(lang)
+        reply_markup=mentor_menu(lang),
+        parse_mode="HTML"
     )
 
 

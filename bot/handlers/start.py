@@ -8,7 +8,7 @@ from bot.texts import t
 from bot.db import (
     is_mentor, get_mentor_by_telegram_id, get_all_mentors,
     get_or_create_student, assign_student_to_mentor,
-    get_user_language, set_user_language, is_student_profile_completed
+    get_user_language, set_user_language
 )
 
 router = Router()
@@ -33,7 +33,8 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=Fal
         mentor = await get_mentor_by_telegram_id(user_id)
         await message.answer(
             t("welcome_mentor", lang, name=mentor.name),
-            reply_markup=mentor_menu(lang)
+            reply_markup=mentor_menu(lang),
+            parse_mode="HTML"
         )
         return
 
@@ -50,15 +51,6 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=Fal
             )
             await assign_student_to_mentor(student, mentor)
 
-            # Check if profile is completed
-            profile_completed = await is_student_profile_completed(user_id)
-
-            if not profile_completed and not is_cancel:
-                # Start profile setup
-                from bot.handlers.profile import start_profile_setup
-                await start_profile_setup(message, state, lang)
-                return
-
             if is_cancel:
                 await message.answer(
                     t("cancelled", lang),
@@ -67,7 +59,8 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext, is_cancel=Fal
             else:
                 await message.answer(
                     t("welcome_student", lang, name=mentor.name),
-                    reply_markup=student_menu(lang)
+                    reply_markup=student_menu(lang),
+                    parse_mode="HTML"
                 )
             return
 

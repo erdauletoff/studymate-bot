@@ -104,10 +104,10 @@ def build_review_text(answers, page: int, lang: str) -> str:
             review_text += t("quiz_review_wrong", lang, num=q.order, question=escape_html(q_text), answer=selected_text, correct=correct_text)
 
     return review_text, total_pages
-from bot.texts import t
+from bot.texts import t, get_season_name
 from bot.db import (
     is_mentor, get_mentor_by_telegram_id, get_student_by_telegram_id,
-    get_student_mentor, get_user_language,
+    get_student_mentor, get_user_language, get_students_by_mentor,
     create_quiz, get_quizzes_by_mentor, get_active_quizzes_by_mentor, get_quiz_by_id,
     create_quiz_question, get_questions_by_quiz, get_question_by_id,
     create_quiz_attempt, finish_quiz_attempt, get_student_attempt,
@@ -845,7 +845,7 @@ async def quiz_publish_ranked_ask_time(callback: CallbackQuery, state: FSMContex
 
 
 @router.callback_query(F.data == "quizranked_now")
-async def quiz_ranked_start_now(callback: CallbackQuery, state: FSMContext):
+async def quiz_ranked_start_now(callback: CallbackQuery, state: FSMContext, bot: Bot):
     """Start ranked quiz now (48 hours window)"""
     from django.utils import timezone
     from datetime import timedelta
@@ -858,7 +858,7 @@ async def quiz_ranked_start_now(callback: CallbackQuery, state: FSMContext):
         available_until=now + timedelta(hours=48)
     )
 
-    await save_ranked_quiz(callback, state, lang)
+    await save_ranked_quiz(callback, state, lang, bot)
 
 
 @router.callback_query(F.data == "quizranked_schedule")
@@ -875,7 +875,7 @@ async def quiz_ranked_schedule(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(QuizStates.waiting_ranked_start_time)
-async def quiz_ranked_receive_start_time(message: Message, state: FSMContext):
+async def quiz_ranked_receive_start_time(message: Message, state: FSMContext, bot: Bot):
     """Receive and parse custom start time"""
     from datetime import datetime, timedelta
     from django.utils import timezone
@@ -913,13 +913,13 @@ async def quiz_ranked_receive_start_time(message: Message, state: FSMContext):
             'answer': lambda *args, **kwargs: None
         })()
 
-        await save_ranked_quiz(fake_callback, state, lang, edit=False)
+        await save_ranked_quiz(fake_callback, state, lang, bot, edit=False)
 
     except ValueError:
         await message.answer(t("invalid_datetime_format", lang), parse_mode="HTML")
 
 
-async def save_ranked_quiz(callback, state: FSMContext, lang: str, edit: bool = True):
+async def save_ranked_quiz(callback, state: FSMContext, lang: str, bot: Bot, edit: bool = True):
     """Save ranked quiz with scheduling"""
     from asgiref.sync import sync_to_async
 
@@ -993,6 +993,29 @@ async def save_ranked_quiz(callback, state: FSMContext, lang: str, edit: bool = 
         await callback.message.answer(result_text, parse_mode="HTML")
 
     await callback.message.answer(t("quiz_ready_actions", lang), reply_markup=mentor_menu(lang))
+
+    # Send notifications to all students
+    students = await get_students_by_mentor(mentor)
+    notification_text_template = "new_ranked_quiz_notification"
+
+    for student in students:
+        try:
+            student_lang = await get_user_language(student.telegram_id)
+            notification_text = t(
+                notification_text_template,
+                student_lang,
+                title=title,
+                start=start_str,
+                end=end_str
+            )
+            await bot.send_message(
+                student.telegram_id,
+                notification_text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            # Skip students who blocked the bot or have errors
+            pass
 
     if hasattr(callback, 'answer'):
         await callback.answer()
@@ -1759,16 +1782,26 @@ async def leaderboard_page_handler(callback: CallbackQuery):
         await callback.answer(t("error", lang))
         return
 
-    # Extract page number
-    page = int(callback.data.replace("leaderpage_", ""))
+    # Extract mode and page: leaderpage_{mode}_{page}
+    parts = callback.data.replace("leaderpage_", "").split("_")
+    mode = parts[0]  # 'season' or 'alltime'
+    page = int(parts[1])
 
     mentor = await get_mentor_by_telegram_id(callback.from_user.id)
     if not mentor:
         await callback.answer(t("error", lang))
         return
 
-    # Get ALL students for mentor (no limit)
-    leaderboard = await get_global_leaderboard(mentor, limit=10000)
+    # Get leaderboard based on mode
+    from bot.db import get_current_season, get_season_leaderboard
+
+    if mode == 'season':
+        season = await get_current_season(mentor)
+        leaderboard = await get_season_leaderboard(season, limit=10000)
+        title_suffix = f"\n<i>📅 {get_season_name(season, lang)}</i>"
+    else:  # alltime
+        leaderboard = await get_global_leaderboard(mentor, limit=10000)
+        title_suffix = "\n<i>📊 За все время</i>"
 
     if not leaderboard:
         await callback.message.edit_text(t("leaderboard_empty", lang))
@@ -1786,8 +1819,8 @@ async def leaderboard_page_handler(callback: CallbackQuery):
     page_leaderboard = leaderboard[start:end]
 
     # Build leaderboard text with real names
-    text = t("leaderboard_mentor_title", lang)
-    text += f"<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
+    text = t("leaderboard_mentor_title", lang) + title_suffix
+    text += f"\n<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
 
     for i, (student, rating_score, avg_percentage, total_quizzes) in enumerate(page_leaderboard, start=start + 1):
         # Show real student name for mentor
@@ -1801,20 +1834,130 @@ async def leaderboard_page_handler(callback: CallbackQuery):
 
     text += t("leaderboard_footer", lang)
 
-    # Build pagination keyboard
+    # Build keyboard with mode switcher and pagination
     buttons = []
+
+    # Mode switcher (top row)
+    mode_row = []
+    if mode == 'season':
+        mode_row.append(InlineKeyboardButton(text="✅ Сезон", callback_data="noop"))
+        mode_row.append(InlineKeyboardButton(text="📊 Все время", callback_data=f"leadermode_alltime_{page}"))
+    else:
+        mode_row.append(InlineKeyboardButton(text="📅 Сезон", callback_data=f"leadermode_season_{page}"))
+        mode_row.append(InlineKeyboardButton(text="✅ Все время", callback_data="noop"))
+    buttons.append(mode_row)
+
+    # Pagination (if needed)
     if total_pages > 1:
         nav = []
         if page > 0:
-            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{page - 1}"))
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{mode}_{page - 1}"))
         nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
         if page < total_pages - 1:
-            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{page + 1}"))
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{mode}_{page + 1}"))
         buttons.append(nav)
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("leadermode_"))
+async def leaderboard_mode_handler(callback: CallbackQuery):
+    """Handle mentor leaderboard mode switching (season/alltime)"""
+    lang = await get_user_language(callback.from_user.id)
+
+    # Check if mentor
+    if not await is_mentor(callback.from_user.id):
+        await callback.answer(t("error", lang))
+        return
+
+    # Extract mode and page: leadermode_{mode}_{page}
+    parts = callback.data.replace("leadermode_", "").split("_")
+    mode = parts[0]  # 'season' or 'alltime'
+    page = int(parts[1]) if len(parts) > 1 else 0
+
+    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
+    if not mentor:
+        await callback.answer(t("error", lang))
+        return
+
+    # Get leaderboard based on mode
+    from bot.db import get_current_season, get_season_leaderboard
+
+    if mode == 'season':
+        season = await get_current_season(mentor)
+        leaderboard = await get_season_leaderboard(season, limit=10000)
+        title_suffix = f"\n<i>📅 {get_season_name(season, lang)}</i>"
+    else:  # alltime
+        leaderboard = await get_global_leaderboard(mentor, limit=10000)
+        title_suffix = "\n<i>📊 За все время</i>"
+
+    if not leaderboard:
+        await callback.message.edit_text(t("leaderboard_empty", lang))
+        return
+
+    # Calculate pagination
+    total_students = len(leaderboard)
+    total_pages = (total_students + LEADERBOARD_PER_PAGE - 1) // LEADERBOARD_PER_PAGE or 1
+
+    # Ensure page is within bounds
+    page = max(0, min(page, total_pages - 1))
+
+    start = page * LEADERBOARD_PER_PAGE
+    end = start + LEADERBOARD_PER_PAGE
+    page_leaderboard = leaderboard[start:end]
+
+    # Build leaderboard text with real names
+    text = t("leaderboard_mentor_title", lang) + title_suffix
+    text += f"\n<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
+
+    for i, (student, rating_score, avg_percentage, total_quizzes) in enumerate(page_leaderboard, start=start + 1):
+        # Show real student name for mentor
+        student_name = str(student)  # Uses Student.__str__() method
+        text += t("leaderboard_mentor_entry", lang,
+                 rank=i,
+                 name=escape_html(student_name),
+                 score=rating_score,
+                 percentage=avg_percentage,
+                 quizzes=total_quizzes)
+
+    text += t("leaderboard_footer", lang)
+
+    # Build keyboard with mode switcher and pagination
+    buttons = []
+
+    # Mode switcher (top row)
+    mode_row = []
+    if mode == 'season':
+        mode_row.append(InlineKeyboardButton(text="✅ Сезон", callback_data="noop"))
+        mode_row.append(InlineKeyboardButton(text="📊 Все время", callback_data=f"leadermode_alltime_{page}"))
+    else:
+        mode_row.append(InlineKeyboardButton(text="📅 Сезон", callback_data=f"leadermode_season_{page}"))
+        mode_row.append(InlineKeyboardButton(text="✅ Все время", callback_data="noop"))
+    buttons.append(mode_row)
+
+    # Pagination (if needed)
+    if total_pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{mode}_{page - 1}"))
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{mode}_{page + 1}"))
+        buttons.append(nav)
+
+    # Back button
+    buttons.append([InlineKeyboardButton(text=t("back", lang), callback_data="main_menu_mentor")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    try:
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception:
+        pass
+
     await callback.answer()
 
 
@@ -2263,18 +2406,21 @@ async def show_leaderboard(message: Message):
         await message.answer(t("not_assigned", lang))
         return
 
-    # Get leaderboard data (top 15)
-    leaderboard = await get_global_leaderboard(mentor, limit=15)
+    # Get current season and leaderboard
+    from bot.db import get_current_season, get_season_leaderboard, get_student_season_rank
+    season = await get_current_season(mentor)
+    leaderboard = await get_season_leaderboard(season, limit=15)
 
     if not leaderboard:
         await message.answer(t("leaderboard_empty", lang))
         return
 
-    # Get current student's rank
-    student_rank_data = await get_student_rank(student, mentor)
+    # Get current student's rank in season
+    student_rank_data = await get_student_season_rank(student, season)
 
-    # Build leaderboard text
+    # Build leaderboard text with season name
     text = t("leaderboard_title", lang)
+    text += f"<i>{get_season_name(season, lang)}</i>\n\n"
 
     for rank, (lb_student, rating_score, avg_percentage, total_quizzes) in enumerate(leaderboard, 1):
         medal = get_medal_emoji(rank)
@@ -2301,15 +2447,28 @@ async def show_leaderboard(message: Message):
     await message.answer(text, parse_mode="HTML")
 
 
-async def show_mentor_leaderboard(message: Message, lang: str, page: int = 0):
-    """Show leaderboard for mentor with real student names and pagination"""
+async def show_mentor_leaderboard(message: Message, lang: str, mode: str = 'season', page: int = 0):
+    """
+    Show leaderboard for mentor with real student names and pagination.
+
+    Args:
+        mode: 'season' for current season, 'alltime' for all-time rating
+    """
     mentor = await get_mentor_by_telegram_id(message.from_user.id)
     if not mentor:
         await message.answer(t("error", lang))
         return
 
-    # Get ALL students for mentor (no limit)
-    leaderboard = await get_global_leaderboard(mentor, limit=10000)
+    # Get leaderboard based on mode
+    from bot.db import get_current_season, get_season_leaderboard
+
+    if mode == 'season':
+        season = await get_current_season(mentor)
+        leaderboard = await get_season_leaderboard(season, limit=10000)
+        title_suffix = f"\n<i>📅 {get_season_name(season, lang)}</i>"
+    else:  # alltime
+        leaderboard = await get_global_leaderboard(mentor, limit=10000)
+        title_suffix = "\n<i>📊 За все время</i>"
 
     if not leaderboard:
         await message.answer(t("leaderboard_empty", lang))
@@ -2327,8 +2486,8 @@ async def show_mentor_leaderboard(message: Message, lang: str, page: int = 0):
     page_leaderboard = leaderboard[start:end]
 
     # Build leaderboard text with real names
-    text = t("leaderboard_mentor_title", lang)
-    text += f"<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
+    text = t("leaderboard_mentor_title", lang) + title_suffix
+    text += f"\n<i>{t('leaderboard_mentor_pagination', lang, total=total_students, page=page + 1, total_pages=total_pages)}</i>\n\n"
 
     for i, (student, rating_score, avg_percentage, total_quizzes) in enumerate(page_leaderboard, start=start + 1):
         # Show real student name for mentor
@@ -2342,16 +2501,28 @@ async def show_mentor_leaderboard(message: Message, lang: str, page: int = 0):
 
     text += t("leaderboard_footer", lang)
 
-    # Build pagination keyboard
+    # Build keyboard with mode switcher and pagination
     buttons = []
+
+    # Mode switcher (top row)
+    mode_row = []
+    if mode == 'season':
+        mode_row.append(InlineKeyboardButton(text="✅ Сезон", callback_data="noop"))
+        mode_row.append(InlineKeyboardButton(text="📊 Все время", callback_data=f"leadermode_alltime_{page}"))
+    else:
+        mode_row.append(InlineKeyboardButton(text="📅 Сезон", callback_data=f"leadermode_season_{page}"))
+        mode_row.append(InlineKeyboardButton(text="✅ Все время", callback_data="noop"))
+    buttons.append(mode_row)
+
+    # Pagination (if needed)
     if total_pages > 1:
         nav = []
         if page > 0:
-            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{page - 1}"))
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"leaderpage_{mode}_{page - 1}"))
         nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
         if page < total_pages - 1:
-            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{page + 1}"))
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"leaderpage_{mode}_{page + 1}"))
         buttons.append(nav)
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer(text, parse_mode="HTML", reply_markup=keyboard)

@@ -12,6 +12,7 @@ django.setup()
 from backend.mentors.models import Mentor
 from backend.materials.models import Topic, Material
 from backend.students.models import Student
+from backend.students.season_models import Season, SeasonRating
 from backend.questions.models import Question
 from backend.downloads.models import Download
 from backend.quizzes.models import Quiz, QuizQuestion, QuizAttempt, QuizAnswer
@@ -144,6 +145,12 @@ def get_student_by_telegram_id(telegram_id: int):
         return Student.objects.get(telegram_id=telegram_id)
     except Student.DoesNotExist:
         return None
+
+
+@sync_to_async
+def get_students_by_mentor(mentor):
+    """Get all students for a given mentor"""
+    return list(Student.objects.filter(mentor=mentor))
 
 
 @sync_to_async
@@ -485,6 +492,15 @@ def finish_quiz_attempt(attempt_id: int, score: int):
             student.last_quiz_date = today
             student.save()
 
+        # Update season rating (only for ranked quizzes)
+        if attempt.quiz.quiz_type == 'ranked':
+            mentor = attempt.quiz.mentor
+            # Use the date when the attempt was started, not today's date
+            # This ensures attempts go to the correct season
+            season = Season.get_or_create_season_for_date(mentor, attempt.started_at)
+            rating = SeasonRating.get_or_create_for_student(student, season)
+            rating.recalculate()
+
         return attempt
     except QuizAttempt.DoesNotExist:
         return None
@@ -773,7 +789,8 @@ def get_global_leaderboard(mentor, limit=10):
             student=student,
             quiz__mentor=mentor,
             quiz__quiz_type='ranked',
-            finished_at__isnull=False
+            finished_at__isnull=False,
+            quiz__available_until__isnull=False  # Only quizzes with available_until set
         ).filter(
             started_at__lt=F('quiz__available_until')
         )
@@ -882,7 +899,8 @@ def get_student_rank(student, mentor):
             student=s,
             quiz__mentor=mentor,
             quiz__quiz_type='ranked',
-            finished_at__isnull=False
+            finished_at__isnull=False,
+            quiz__available_until__isnull=False  # Only quizzes with available_until set
         ).filter(
             started_at__lt=F('quiz__available_until')
         )
@@ -918,3 +936,74 @@ def get_student_rank(student, mentor):
             return (rank, s_data['rating_score'], s_data['avg_percentage'], s_data['total_quizzes'])
 
     return None
+
+# ==================== SEASONS ====================
+
+@sync_to_async
+def get_current_season(mentor):
+    """Get or create current season for mentor"""
+    return Season.get_or_create_current_season(mentor)
+
+
+@sync_to_async
+def get_season_leaderboard(season, limit=100):
+    """
+    Get leaderboard for a specific season.
+    Returns list of (student, rating_score, avg_percentage, total_quizzes)
+    """
+    ratings = SeasonRating.objects.filter(
+        season=season,
+        rating_score__gt=0
+    ).select_related('student').order_by('-rating_score')[:limit]
+
+    return [
+        (r.student, r.rating_score, r.avg_percentage, r.total_ranked_quizzes)
+        for r in ratings
+    ]
+
+
+@sync_to_async
+def update_season_rating(student, quiz_attempt):
+    """
+    Update student's rating in current season after quiz completion.
+    Called after finish_quiz_attempt.
+    """
+    if quiz_attempt.quiz.quiz_type != 'ranked':
+        return  # Only ranked quizzes affect season rating
+
+    # Get current season
+    mentor = quiz_attempt.quiz.mentor
+    season = Season.get_or_create_current_season(mentor)
+
+    # Get or create rating record
+    rating = SeasonRating.get_or_create_for_student(student, season)
+
+    # Recalculate rating
+    rating.recalculate()
+
+
+@sync_to_async
+def get_student_season_rank(student, season):
+    """
+    Get student's rank in a specific season.
+    Returns tuple: (rank, rating_score, avg_percentage, total_quizzes) or None
+    """
+    try:
+        rating = SeasonRating.objects.get(season=season, student=student)
+        
+        # Count how many students have higher rating
+        higher_count = SeasonRating.objects.filter(
+            season=season,
+            rating_score__gt=rating.rating_score
+        ).count()
+        
+        rank = higher_count + 1
+        return (rank, rating.rating_score, rating.avg_percentage, rating.total_ranked_quizzes)
+    except SeasonRating.DoesNotExist:
+        return None
+
+
+@sync_to_async
+def get_all_seasons(mentor):
+    """Get all seasons for mentor, ordered by start date descending"""
+    return list(Season.objects.filter(mentor=mentor).order_by('-start_date'))

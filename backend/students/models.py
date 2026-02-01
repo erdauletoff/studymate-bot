@@ -1,6 +1,9 @@
 from django.db import models
 from backend.mentors.models import Mentor
 
+# Import season models to ensure Django discovers them
+from .season_models import Season, SeasonRating  # noqa: F401
+
 
 class Student(models.Model):
     telegram_id = models.BigIntegerField(unique=True, verbose_name="Telegram ID")

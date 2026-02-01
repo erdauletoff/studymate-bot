@@ -4,10 +4,24 @@ TEXTS = {
         "choose_language": "🌐 Выберите язык:",
         "language_changed": "✅ Язык изменён на русский",
         "btn_language": "🌐 Язык",
-        
+
+        # ===== MONTHS =====
+        "month_1": "Январь",
+        "month_2": "Февраль",
+        "month_3": "Март",
+        "month_4": "Апрель",
+        "month_5": "Май",
+        "month_6": "Июнь",
+        "month_7": "Июль",
+        "month_8": "Август",
+        "month_9": "Сентябрь",
+        "month_10": "Октябрь",
+        "month_11": "Ноябрь",
+        "month_12": "Декабрь",
+
         # ===== START =====
         "welcome_mentor": "👋 Добро пожаловать, {name}!\n\nВы можете загружать и управлять учебными материалами.",
-        "welcome_student": "👋 Добро пожаловать в StudyMate!\n\n📚 Ваш ментор: {name}\n\nЗдесь вы можете найти учебные материалы и задать вопросы анонимно.",
+        "welcome_student": "👋 Добро пожаловать в StudyMate!\n\n📚 Ваш ментор: {name}\n\n<b>Возможности бота:</b>\n📚 Учебные материалы — скачивайте файлы и документы\n📝 Квизы — проходите рейтинговые и практические тесты\n❓ Вопросы — задавайте вопросы ментору анонимно\n🏆 Рейтинг — следите за своими результатами\n👤 Профиль — управляйте настройками и статистикой",
         "access_denied": "⛔ Доступ запрещён.\n\nВы должны быть участником группы курса.\nОбратитесь к вашему ментору.",
         
         # ===== MENU BUTTONS =====
@@ -238,6 +252,7 @@ TEXTS = {
         "quiz_exam_mode_result": "🎉 <b>Квиз завершён!</b>\n\n✅ Ваш результат: <b>{score}/{total}</b>\n\n📊 Правильные ответы будут показаны после окончания времени квиза.",
         "no_ranked_quizzes": "📭 Сейчас нет активных рейтинговых квизов.",
         "no_practice_quizzes": "📭 Практических квизов пока нет.",
+        "new_ranked_quiz_notification": "🏆 <b>Новый рейтинговый квиз!</b>\n\n📝 {title}\n📅 Начало: {start}\n⏰ Окончание: {end}\n\nУ вас есть только <b>одна попытка</b>. Результат повлияет на рейтинг!",
 
         # ===== MENU HEADERS =====
         "quiz_management_header": "📝 <b>Управление квизами</b>\n\nВыберите категорию:",
@@ -267,9 +282,23 @@ TEXTS = {
         "language_changed": "✅ Til qaraqalpaqshaǵa ózgertildi",
         "btn_language": "🌐 Til",
 
+        # ===== MONTHS =====
+        "month_1": "Yanvar",
+        "month_2": "Fevral",
+        "month_3": "Mart",
+        "month_4": "Aprel",
+        "month_5": "May",
+        "month_6": "Iyun",
+        "month_7": "Iyul",
+        "month_8": "Avgust",
+        "month_9": "Sentyabr",
+        "month_10": "Oktyabr",
+        "month_11": "Noyabr",
+        "month_12": "Dekabr",
+
         # ===== START =====
         "welcome_mentor": "👋 Xosh kelipsiz, {name}!\n\nSiz oqıw materialların júklewińiz hám basqarıwıńız múmkin.",
-        "welcome_student": "👋 StudyMate'ǵa xosh kelipsiz!\n\n📚 Mentorıńız: {name}\n\nBul jerde oqıw materialların tabıwıńız hám anonim soraw beriwińiz múmkin.",
+        "welcome_student": "👋 StudyMate'ǵa xosh kelipsiz!\n\n📚 Mentorıńız: {name}\n\n<b>Bottıń imkaniyatlari</b>:\n📚 Oqıw materialları — fayllar hám dokumentlerdi júklep alıń\n📝 Kvizler — reytinglik hám praktikalıq testlerden ótiń\n❓ Sorawlar — mentorǵa anonim soraw beriń\n🏆 Reyting — nátiyjeleriń menen tanısıń",
         "access_denied": "⛔ Kiriw qadaǵan etilgen.\n\nSiz kurs toparınıń aǵzası bolıwıńız kerek.\nMentorińizǵa xabarlasıń.",
         
         # ===== MENU BUTTONS =====
@@ -498,17 +527,18 @@ TEXTS = {
         "quiz_ranked_badge": "🏆",
         "quiz_practice_badge": "📚",
         "quiz_exam_mode_result": "🎉 <b>Kviz tamamlandı!</b>\n\n✅ Sizdiń nátiyjeńiz: <b>{score}/{total}</b>\n\n📊 Durıs juwaplar kviz waqtı bitkennen keyin kórsetiledi.",
-        "no_ranked_quizzes": "📭 Házir ámellik reytinglik kvizler joq.",
+        "no_ranked_quizzes": "📭 Házir aktiv reytinglik kvizler joq.",
         "no_practice_quizzes": "📭 Praktikalıq kvizler áli joq.",
+        "new_ranked_quiz_notification": "🏆 <b>Jańa reytinglik kviz!</b>\n\n📝 {title}\n📅 Baslanıwı: {start}\n⏰ Tamamlanıwı: {end}\n\nSizde tek <b>bir imkaniyat</b> bar. Nátiyje reytingge tásiir etedi!",
 
         # ===== MENU HEADERS =====
         "quiz_management_header": "📝 <b>Kvizlerdi basqarıw</b>\n\nKategoriya tańlań:",
         "quiz_student_header": "📝 <b>Kvizler</b>\n\nKategoriya tańlań:",
-        "btn_active_quizzes": "📝 Ámellik kvizler",
+        "btn_active_quizzes": "📝 Aktiv kvizler",
         "btn_archived_quizzes": "🗄️ Arxivlengen kvizler",
         "btn_ranked_quizzes": "🏆 Reytinglik kvizler",
         "btn_practice_quizzes": "📚 Praktikalıq kvizler",
-        "active_quizzes_header": "📝 <b>Ámellik kvizler</b>",
+        "active_quizzes_header": "📝 <b>Aktiv kvizler</b>",
         "archived_quizzes_header": "🗄️ <b>Arxivlengen kvizler</b>",
         "ranked_quizzes_header": "🏆 <b>Reytinglik kvizler</b>",
         "practice_quizzes_header": "📚 <b>Praktikalıq kvizler</b>",
@@ -529,9 +559,23 @@ TEXTS = {
         "language_changed": "✅ Language changed to English",
         "btn_language": "🌐 Language",
 
+        # ===== MONTHS =====
+        "month_1": "January",
+        "month_2": "February",
+        "month_3": "March",
+        "month_4": "April",
+        "month_5": "May",
+        "month_6": "June",
+        "month_7": "July",
+        "month_8": "August",
+        "month_9": "September",
+        "month_10": "October",
+        "month_11": "November",
+        "month_12": "December",
+
         # ===== START =====
         "welcome_mentor": "👋 Welcome, {name}!\n\nYou can upload and manage lesson materials.",
-        "welcome_student": "👋 Welcome to StudyMate!\n\n📚 Your mentor: {name}\n\nHere you can find lesson materials and ask questions anonymously.",
+        "welcome_student": "👋 Welcome to StudyMate!\n\n📚 Your mentor: {name}\n\n<b>Bot features:</b>\n📚 Lesson materials — download files and documents\n📝 Quizzes — take ranked and practice tests\n❓ Questions — ask your mentor anonymously\n🏆 Leaderboard — track your results\n👤 Profile — manage settings and statistics",
         "access_denied": "⛔ Access denied.\n\nYou must be a member of a course group.\nContact your mentor.",
         
         # ===== MENU BUTTONS =====
@@ -762,6 +806,7 @@ TEXTS = {
         "quiz_exam_mode_result": "🎉 <b>Quiz completed!</b>\n\n✅ Your result: <b>{score}/{total}</b>\n\n📊 Correct answers will be shown after the quiz time ends.",
         "no_ranked_quizzes": "📭 No active ranked quizzes right now.",
         "no_practice_quizzes": "📭 No practice quizzes yet.",
+        "new_ranked_quiz_notification": "🏆 <b>New ranked quiz!</b>\n\n📝 {title}\n📅 Start: {start}\n⏰ End: {end}\n\nYou have only <b>one attempt</b>. The result will affect the leaderboard!",
 
         # ===== MENU HEADERS =====
         "quiz_management_header": "📝 <b>Quiz Management</b>\n\nChoose category:",
@@ -795,3 +840,25 @@ def t(key: str, lang: str = None, **kwargs) -> str:
         lang = DEFAULT_LANG
     text = TEXTS.get(lang, TEXTS[DEFAULT_LANG]).get(key, key)
     return text.format(**kwargs) if kwargs else text
+
+
+def get_season_name(season, lang: str = None) -> str:
+    """
+    Generate season name dynamically based on user language.
+
+    Args:
+        season: Season object with start_date attribute
+        lang: User language code (ru, qq, en)
+
+    Returns:
+        Localized season name (e.g., "Февраль 2026", "February 2026")
+    """
+    if lang is None:
+        lang = DEFAULT_LANG
+
+    # Get month name from translations
+    month_key = f"month_{season.start_date.month}"
+    month_name = t(month_key, lang)
+
+    # Format: "Month Year" (e.g., "Февраль 2026")
+    return f"{month_name} {season.start_date.year}"
