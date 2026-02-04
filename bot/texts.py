@@ -119,7 +119,16 @@ TEXTS = {
         "reply_sent": "✅ Ответ отправлен ученику!",
         "mentor_reply": "💬 <b>Ответ от вашего ментора:</b>\n\n{text}",
         "question_not_found": "❌ Вопрос не найден",
-        
+
+        # ===== MESSAGES TO STUDENTS =====
+        "btn_message_students": "✉️ Написать ученику",
+        "select_student": "👥 Выберите ученика:",
+        "no_students": "📭 У вас пока нет учеников.",
+        "write_message_to_student": "✏️ Напишите сообщение для <b>{name}</b>:",
+        "message_sent_to_student": "✅ Сообщение отправлено ученику {name}!",
+        "mentor_message": "✉️ <b>Сообщение от вашего ментора:</b>\n\n{text}",
+        "student_not_found": "❌ Ученик не найден",
+
         # ===== ERRORS =====
         "error": "⚠️ Ошибка. Используйте /start",
         "not_assigned": "⚠️ Вы не привязаны к ментору. Используйте /start",
@@ -404,7 +413,16 @@ TEXTS = {
         "reply_sent": "✅ Juwap oqıwshıǵa jiberildi!",
         "mentor_reply": "💬 <b>Mentordan juwap:</b>\n\n{text}",
         "question_not_found": "❌ Soraw tabilmadı",
-        
+
+        # ===== MESSAGES TO STUDENTS =====
+        "btn_message_students": "✉️ Oqıwshıǵa jazıw",
+        "select_student": "👥 Oqıwshını tańlań:",
+        "no_students": "📭 Házirshe oqıwshılarıńız joq.",
+        "write_message_to_student": "✏️ <b>{name}</b> ushın xabar jazıń:",
+        "message_sent_to_student": "✅ Xabar {name} oqıwshıǵa jiberildi!",
+        "mentor_message": "✉️ <b>Mentordan xabar:</b>\n\n{text}",
+        "student_not_found": "❌ Oqıwshı tabilmadı",
+
         # ===== ERRORS =====
         "error": "⚠️ Qátelik. /start buyrıgın paydalanıń",
         "not_assigned": "⚠️ Siz mentorǵa biriktirilmegensiz. /start buyrıgın paydalanıń",
@@ -689,7 +707,16 @@ TEXTS = {
         "reply_sent": "✅ Reply sent to the student!",
         "mentor_reply": "💬 <b>Reply from your mentor:</b>\n\n{text}",
         "question_not_found": "❌ Question not found",
-        
+
+        # ===== MESSAGES TO STUDENTS =====
+        "btn_message_students": "✉️ Message Student",
+        "select_student": "👥 Select a student:",
+        "no_students": "📭 You don't have any students yet.",
+        "write_message_to_student": "✏️ Write a message for <b>{name}</b>:",
+        "message_sent_to_student": "✅ Message sent to {name}!",
+        "mentor_message": "✉️ <b>Message from your mentor:</b>\n\n{text}",
+        "student_not_found": "❌ Student not found",
+
         # ===== ERRORS =====
         "error": "⚠️ Error. Use /start",
         "not_assigned": "⚠️ You are not assigned to a mentor. Use /start",

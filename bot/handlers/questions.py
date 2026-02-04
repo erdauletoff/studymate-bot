@@ -58,12 +58,16 @@ async def receive_question(message: Message, state: FSMContext, bot: Bot):
     student = await get_student_by_telegram_id(message.from_user.id)
 
     question = await create_question(mentor, message.text, student)
-    
+
+    # Get question ID explicitly
+    question_id = question.id
+    print(f"DEBUG: Created question with ID: {question_id}")
+
     # Get mentor's language for the notification
     mentor_lang = await get_user_language(mentor.telegram_id)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_reply", mentor_lang), callback_data=f"reply_{question.id}")]
+        [InlineKeyboardButton(text=t("btn_reply", mentor_lang), callback_data=f"reply_{question_id}")]
     ])
 
     await bot.send_message(
@@ -84,9 +88,12 @@ async def question_reply_start(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_language(callback.from_user.id)
 
     question_id = int(callback.data.replace("reply_", ""))
+    print(f"DEBUG: Trying to get question with ID: {question_id}")
     question = await get_question_by_id(question_id)
+    print(f"DEBUG: Question found: {question is not None}")
 
     if not question:
+        print(f"DEBUG: Question not found for ID: {question_id}")
         await callback.answer(t("question_not_found", lang))
         return
 

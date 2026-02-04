@@ -19,7 +19,7 @@ def mentor_menu(lang: str) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=t("btn_materials_menu", lang)), KeyboardButton(text=t("btn_quizzes", lang))],
             [KeyboardButton(text=t("btn_questions", lang)), KeyboardButton(text=t("btn_leaderboard", lang))],
-            [KeyboardButton(text=t("btn_language", lang))]
+            [KeyboardButton(text=t("btn_message_students", lang)), KeyboardButton(text=t("btn_language", lang))]
         ],
         resize_keyboard=True
     )
@@ -169,4 +169,36 @@ def files_for_view(materials, topic_id: int, lang: str, page: int = 0) -> Inline
         buttons.append(nav)
 
     buttons.append([InlineKeyboardButton(text=t("btn_back", lang), callback_data="back_view")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def students_for_message(students, lang: str, page: int = 0) -> InlineKeyboardMarkup:
+    """Show list of students for selecting to send a message"""
+    total_pages = (len(students) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE or 1
+    start = page * ITEMS_PER_PAGE
+    end = start + ITEMS_PER_PAGE
+    page_students = students[start:end]
+
+    buttons = []
+    for student in page_students:
+        # Show full name if available, otherwise Telegram name or ID
+        name = student.full_name or f"{student.first_name} {student.last_name}".strip() or f"ID: {student.telegram_id}"
+        buttons.append([InlineKeyboardButton(
+            text=f"👤 {name}",
+            callback_data=f"msgstudent_{student.id}"
+        )])
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text=t("btn_prev", lang), callback_data=f"msgpage_{page - 1}"))
+
+    if total_pages > 1:
+        nav.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text=t("btn_next", lang), callback_data=f"msgpage_{page + 1}"))
+
+    if nav:
+        buttons.append(nav)
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)

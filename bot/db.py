@@ -148,6 +148,14 @@ def get_student_by_telegram_id(telegram_id: int):
 
 
 @sync_to_async
+def get_student_by_id(student_id: int):
+    try:
+        return Student.objects.get(id=student_id)
+    except Student.DoesNotExist:
+        return None
+
+
+@sync_to_async
 def get_students_by_mentor(mentor):
     """Get all students for a given mentor"""
     return list(Student.objects.filter(mentor=mentor))
@@ -248,7 +256,9 @@ def get_materials_count_by_topics(topics) -> dict:
 
 @sync_to_async
 def create_question(mentor, text: str, student=None):
-    return Question.objects.create(mentor=mentor, text=text, student=student)
+    question = Question.objects.create(mentor=mentor, text=text, student=student)
+    question.refresh_from_db()
+    return question
 
 
 @sync_to_async
