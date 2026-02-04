@@ -256,11 +256,16 @@ def get_materials_count_by_topics(topics) -> dict:
 # ==================== QUESTIONS ====================
 
 @sync_to_async(thread_sensitive=True)
-def create_question(mentor, text: str, student=None):
+def create_question(mentor, text: str, student=None, message_id=None):
     from django.db import connection
     try:
         # Create the question
-        question = Question.objects.create(mentor=mentor, text=text, student=student)
+        question = Question.objects.create(
+            mentor=mentor,
+            text=text,
+            student=student,
+            message_id=message_id
+        )
 
         # Verify the question was saved
         question_id = question.id
@@ -275,7 +280,7 @@ def create_question(mentor, text: str, student=None):
         # Force a database flush to ensure write is committed
         connection.commit()
 
-        print(f"DEBUG create_question: Created and committed question ID {question_id}, mentor={mentor.id}, text_length={len(text)}")
+        print(f"DEBUG create_question: Created and committed question ID {question_id}, mentor={mentor.id}, text_length={len(text)}, message_id={message_id}")
 
         # Return the question with all fields populated
         return question

@@ -11,6 +11,7 @@ class Question(models.Model):
     is_answered = models.BooleanField(default=False, verbose_name="Answered")
     created_at = models.DateTimeField(auto_now_add=True)
     replied_at = models.DateTimeField(null=True, blank=True, verbose_name="Last Reply Time")
+    message_id = models.BigIntegerField(null=True, blank=True, verbose_name="Student's Message ID")
 
     class Meta:
         verbose_name = "Anonymous Question"
