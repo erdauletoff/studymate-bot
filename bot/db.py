@@ -4,6 +4,7 @@ import django
 from asgiref.sync import sync_to_async
 from datetime import timedelta
 from django.utils import timezone
+from django.db import transaction
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'backend.core.settings')
@@ -254,11 +255,27 @@ def get_materials_count_by_topics(topics) -> dict:
 
 # ==================== QUESTIONS ====================
 
-@sync_to_async
+@sync_to_async(thread_sensitive=True)
 def create_question(mentor, text: str, student=None):
-    question = Question.objects.create(mentor=mentor, text=text, student=student)
-    question.refresh_from_db()
-    return question
+    try:
+        # Don't use transaction.atomic here - let Django handle it
+        # The default AUTOCOMMIT mode should commit immediately
+        question = Question.objects.create(mentor=mentor, text=text, student=student)
+
+        # Verify the question was saved
+        question_id = question.id
+        if question_id is None:
+            raise ValueError("Question ID is None after creation!")
+
+        print(f"DEBUG create_question: Created question ID {question_id}, mentor={mentor.id}, text_length={len(text)}")
+
+        # Return the question with all fields populated
+        return question
+    except Exception as e:
+        print(f"ERROR creating question: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 @sync_to_async
@@ -277,11 +294,32 @@ def mark_question_answered(question_id: int) -> bool:
         return False
 
 
-@sync_to_async
+@sync_to_async(thread_sensitive=True)
 def get_question_by_id(question_id: int):
     try:
-        return Question.objects.get(id=question_id)
+        print(f"DEBUG get_question_by_id: Looking for question ID {question_id}")
+
+        # Check if question exists at all
+        exists = Question.objects.filter(id=question_id).exists()
+        print(f"DEBUG get_question_by_id: Question {question_id} exists: {exists}")
+
+        if not exists:
+            # Try to list all questions to debug
+            all_ids = list(Question.objects.values_list('id', flat=True)[:10])
+            print(f"DEBUG get_question_by_id: Recent question IDs: {all_ids}")
+            return None
+
+        # Use select_related to ensure we get the related objects
+        question = Question.objects.select_related('mentor', 'student').get(id=question_id)
+        print(f"DEBUG get_question_by_id: Found question {question_id}, text_length={len(question.text)}")
+        return question
     except Question.DoesNotExist:
+        print(f"DEBUG get_question_by_id: Question {question_id} DoesNotExist exception")
+        return None
+    except Exception as e:
+        print(f"ERROR get_question_by_id: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
