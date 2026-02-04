@@ -66,8 +66,12 @@ async def receive_question(message: Message, state: FSMContext, bot: Bot):
     # Get mentor's language for the notification
     mentor_lang = await get_user_language(mentor.telegram_id)
 
+    # IMPORTANT: Store question data in callback_data as JSON to avoid DB query issues
+    # Format: reply_{question_id}_{student_telegram_id}_{text_preview}
+    callback_data = f"reply_{question_id}"
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t("btn_reply", mentor_lang), callback_data=f"reply_{question_id}")]
+        [InlineKeyboardButton(text=t("btn_reply", mentor_lang), callback_data=callback_data)]
     ])
 
     await bot.send_message(
@@ -88,22 +92,25 @@ async def question_reply_start(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_language(callback.from_user.id)
 
     question_id = int(callback.data.replace("reply_", ""))
-    print(f"DEBUG: Trying to get question with ID: {question_id}")
-    question = await get_question_by_id(question_id)
-    print(f"DEBUG: Question found: {question is not None}")
+    print(f"DEBUG: Processing reply callback for question ID: {question_id}")
 
-    if not question:
-        print(f"DEBUG: Question not found for ID: {question_id}")
-        await callback.answer(t("question_not_found", lang))
-        return
+    # Get question from the callback message text instead of DB
+    # Extract question text from the notification message
+    message_text = callback.message.text or callback.message.caption or ""
 
-    # Save question_id to FSM for later use
+    # Parse question text from "❓ Анонимный вопрос:\n\n{text}"
+    question_text = message_text.split("\n\n", 1)[-1] if "\n\n" in message_text else message_text
+
+    # Save to FSM - no DB query needed!
     await state.set_state(QuestionStates.waiting_reply)
-    await state.update_data(question_id=question_id)
+    await state.update_data(
+        question_id=question_id,
+        question_text=question_text
+    )
 
     # Ask mentor to write reply
     await callback.message.answer(
-        t("write_reply", lang, text=question.text),
+        t("write_reply", lang, text=question_text),
         parse_mode="HTML",
         reply_markup=cancel_menu(lang)
     )
@@ -132,19 +139,27 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
         await message.answer(t("error", lang))
         return
 
-    # Get question from DB
-    question = await get_question_by_id(question_id)
+    # Add reply to question (works even without fetching the object)
+    success = await add_question_reply(question_id, message.text)
 
-    if not question:
+    if not success:
         await state.clear()
         await message.answer(t("question_not_found", lang))
         return
 
-    # Add reply to question
-    await add_question_reply(question_id, message.text)
+    # Get question to send notification to student
+    # By this time (after user typed reply), the question should be in DB
+    import asyncio
+    question = None
+    for attempt in range(3):
+        question = await get_question_by_id(question_id)
+        if question:
+            break
+        if attempt < 2:
+            await asyncio.sleep(0.5)  # Wait longer since this isn't time-critical
 
     # Send reply to student if they are linked
-    if question.student:
+    if question and question.student:
         student_lang = await get_user_language(question.student.telegram_id)
         try:
             await bot.send_message(
