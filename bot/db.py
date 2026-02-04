@@ -267,6 +267,33 @@ def mark_question_answered(question_id: int) -> bool:
         return False
 
 
+@sync_to_async
+def get_question_by_id(question_id: int):
+    try:
+        return Question.objects.get(id=question_id)
+    except Question.DoesNotExist:
+        return None
+
+
+@sync_to_async
+def add_question_reply(question_id: int, reply_text: str) -> bool:
+    """Add or append reply to a question"""
+    try:
+        question = Question.objects.get(id=question_id)
+        if question.reply_text:
+            # Append to existing reply
+            question.reply_text += f"\n\n---\n\n{reply_text}"
+        else:
+            # First reply
+            question.reply_text = reply_text
+        question.is_answered = True
+        question.replied_at = timezone.now()
+        question.save()
+        return True
+    except Question.DoesNotExist:
+        return False
+
+
 # ==================== DOWNLOADS ====================
 
 @sync_to_async

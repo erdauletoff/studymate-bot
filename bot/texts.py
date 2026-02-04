@@ -112,8 +112,13 @@ TEXTS = {
         "unanswered_questions": "❓ Вопросов без ответа ({count}):\n\n",
         "anonymous_question": "❓ <b>Анонимный вопрос:</b>\n\n{text}",
         "btn_answered": "✅ Отвечено",
+        "btn_reply": "💬 Ответить",
         "marked_answered": "✅ Отмечено!",
         "and_more": "...и ещё {count}.",
+        "write_reply": "✏️ Напишите ваш ответ на вопрос:\n\n<b>Вопрос:</b> {text}",
+        "reply_sent": "✅ Ответ отправлен ученику!",
+        "mentor_reply": "💬 <b>Ответ от вашего ментора:</b>\n\n{text}",
+        "question_not_found": "❌ Вопрос не найден",
         
         # ===== ERRORS =====
         "error": "⚠️ Ошибка. Используйте /start",
@@ -392,8 +397,13 @@ TEXTS = {
         "unanswered_questions": "❓ Juwap berilmegen sorawlar ({count}):\n\n",
         "anonymous_question": "❓ <b>Anonim soraw:</b>\n\n{text}",
         "btn_answered": "✅ Juwap berildi",
+        "btn_reply": "💬 Juwap beriw",
         "marked_answered": "✅ Belgilendi!",
         "and_more": "...hám jáne {count}.",
+        "write_reply": "✏️ Sorawǵa juwabıńızdı jazıń:\n\n<b>Soraw:</b> {text}",
+        "reply_sent": "✅ Juwap oqıwshıǵa jiberildi!",
+        "mentor_reply": "💬 <b>Mentordan juwap:</b>\n\n{text}",
+        "question_not_found": "❌ Soraw tabilmadı",
         
         # ===== ERRORS =====
         "error": "⚠️ Qátelik. /start buyrıgın paydalanıń",
@@ -672,8 +682,13 @@ TEXTS = {
         "unanswered_questions": "❓ Unanswered questions ({count}):\n\n",
         "anonymous_question": "❓ <b>Anonymous question:</b>\n\n{text}",
         "btn_answered": "✅ Answered",
+        "btn_reply": "💬 Reply",
         "marked_answered": "✅ Marked!",
         "and_more": "...and {count} more.",
+        "write_reply": "✏️ Write your reply to the question:\n\n<b>Question:</b> {text}",
+        "reply_sent": "✅ Reply sent to the student!",
+        "mentor_reply": "💬 <b>Reply from your mentor:</b>\n\n{text}",
+        "question_not_found": "❌ Question not found",
         
         # ===== ERRORS =====
         "error": "⚠️ Error. Use /start",
