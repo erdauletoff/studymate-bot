@@ -257,9 +257,9 @@ def get_materials_count_by_topics(topics) -> dict:
 
 @sync_to_async(thread_sensitive=True)
 def create_question(mentor, text: str, student=None):
+    from django.db import connection
     try:
-        # Don't use transaction.atomic here - let Django handle it
-        # The default AUTOCOMMIT mode should commit immediately
+        # Create the question
         question = Question.objects.create(mentor=mentor, text=text, student=student)
 
         # Verify the question was saved
@@ -267,7 +267,15 @@ def create_question(mentor, text: str, student=None):
         if question_id is None:
             raise ValueError("Question ID is None after creation!")
 
-        print(f"DEBUG create_question: Created question ID {question_id}, mentor={mentor.id}, text_length={len(text)}")
+        # CRITICAL: Force commit for Heroku connection pooling
+        # Ensure the transaction is visible to other connections
+        if connection.in_atomic_block:
+            print(f"DEBUG create_question: Warning - in atomic block, commit may be delayed")
+
+        # Force a database flush to ensure write is committed
+        connection.commit()
+
+        print(f"DEBUG create_question: Created and committed question ID {question_id}, mentor={mentor.id}, text_length={len(text)}")
 
         # Return the question with all fields populated
         return question
@@ -296,23 +304,34 @@ def mark_question_answered(question_id: int) -> bool:
 
 @sync_to_async(thread_sensitive=True)
 def get_question_by_id(question_id: int):
+    import time
     try:
         print(f"DEBUG get_question_by_id: Looking for question ID {question_id}")
 
-        # Check if question exists at all
-        exists = Question.objects.filter(id=question_id).exists()
-        print(f"DEBUG get_question_by_id: Question {question_id} exists: {exists}")
+        # Retry logic for Heroku connection pooling issues
+        max_retries = 3
+        for attempt in range(max_retries):
+            # Check if question exists
+            exists = Question.objects.filter(id=question_id).exists()
+            print(f"DEBUG get_question_by_id: Attempt {attempt + 1}/{max_retries}, Question {question_id} exists: {exists}")
 
-        if not exists:
-            # Try to list all questions to debug
-            all_ids = list(Question.objects.values_list('id', flat=True)[:10])
-            print(f"DEBUG get_question_by_id: Recent question IDs: {all_ids}")
-            return None
+            if exists:
+                # Found it! Get the full object
+                question = Question.objects.select_related('mentor', 'student').get(id=question_id)
+                print(f"DEBUG get_question_by_id: Found question {question_id}, text_length={len(question.text)}")
+                return question
 
-        # Use select_related to ensure we get the related objects
-        question = Question.objects.select_related('mentor', 'student').get(id=question_id)
-        print(f"DEBUG get_question_by_id: Found question {question_id}, text_length={len(question.text)}")
-        return question
+            # Not found yet - wait a bit for database replication/pooling
+            if attempt < max_retries - 1:
+                wait_time = 0.1 * (attempt + 1)  # 0.1s, 0.2s
+                print(f"DEBUG get_question_by_id: Question not found, waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+
+        # Still not found after retries
+        all_ids = list(Question.objects.values_list('id', flat=True).order_by('-id')[:10])
+        print(f"DEBUG get_question_by_id: Question {question_id} not found after {max_retries} retries. Recent question IDs: {all_ids}")
+        return None
+
     except Question.DoesNotExist:
         print(f"DEBUG get_question_by_id: Question {question_id} DoesNotExist exception")
         return None
