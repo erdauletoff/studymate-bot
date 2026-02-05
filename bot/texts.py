@@ -117,6 +117,7 @@ TEXTS = {
         "and_more": "...и ещё {count}.",
         "write_reply": "✏️ Напишите ваш ответ на вопрос:\n\n<b>Вопрос:</b> {text}",
         "reply_sent": "✅ Ответ отправлен ученику!",
+        "reply_saved_not_sent": "⚠️ Ответ сохранён, но не удалось отправить ученику.",
         "mentor_reply": "💬 <b>Ответ от вашего ментора:</b>\n\n{text}",
         "question_not_found": "❌ Вопрос не найден",
 
@@ -411,6 +412,7 @@ TEXTS = {
         "and_more": "...hám jáne {count}.",
         "write_reply": "✏️ Sorawǵa juwabıńızdı jazıń:\n\n<b>Soraw:</b> {text}",
         "reply_sent": "✅ Juwap oqıwshıǵa jiberildi!",
+        "reply_saved_not_sent": "⚠️ Juwap saqlandı, biraq oqıwshıǵa jiberilmedi.",
         "mentor_reply": "💬 <b>Mentordan juwap:</b>\n\n{text}",
         "question_not_found": "❌ Soraw tabilmadı",
 
@@ -705,6 +707,7 @@ TEXTS = {
         "and_more": "...and {count} more.",
         "write_reply": "✏️ Write your reply to the question:\n\n<b>Question:</b> {text}",
         "reply_sent": "✅ Reply sent to the student!",
+        "reply_saved_not_sent": "⚠️ Reply saved, but could not be sent to the student.",
         "mentor_reply": "💬 <b>Reply from your mentor:</b>\n\n{text}",
         "question_not_found": "❌ Question not found",
 
