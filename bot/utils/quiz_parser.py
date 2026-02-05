@@ -58,12 +58,39 @@ def parse_quiz_file(content: str) -> dict:
         if len(q_lines) < 2:
             raise ValueError(f"Question {q_num} has insufficient content")
 
-        question_text = q_lines[0].strip()
+        # NEW LOGIC: Collect all lines until first option as question text
+        question_lines = []
+        option_start_index = None
 
+        for i, line in enumerate(q_lines):
+            line = line.strip()
+            if not line:
+                # Empty lines are part of question text (for spacing in code blocks)
+                question_lines.append('')
+                continue
+
+            # Check if this line is an option (A), B), C), D))
+            if re.match(r'^([A-D])(\*)?\)\s*', line, re.IGNORECASE):
+                option_start_index = i
+                break
+            else:
+                # This line is part of the question
+                question_lines.append(line)
+
+        if not question_lines:
+            raise ValueError(f"Question {q_num} has no text")
+
+        if option_start_index is None:
+            raise ValueError(f"Question {q_num} has no options")
+
+        # Join question lines (preserve line breaks for code blocks)
+        question_text = '\n'.join(question_lines).strip()
+
+        # Parse options starting from option_start_index
         options = {"A": None, "B": None, "C": None, "D": None}
         correct_answer = None
 
-        for line in q_lines[1:]:
+        for line in q_lines[option_start_index:]:
             line = line.strip()
             if not line:
                 continue
