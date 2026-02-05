@@ -146,32 +146,33 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
         await message.answer(t("error", lang))
         return
 
-    # Add reply to question (works even without fetching the object)
+    # IMPORTANT: Get question FIRST before updating it
+    # This avoids connection pooling issues on Heroku
+    import asyncio
+    print(f"DEBUG: Getting question {question_id} before adding reply")
+    question = None
+    for attempt in range(3):
+        question = await get_question_by_id(question_id)
+        if question:
+            print(f"DEBUG: Question {question_id} found. Student telegram_id: {question.student_telegram_id}")
+            break
+        if attempt < 2:
+            await asyncio.sleep(0.5)
+
+    if not question:
+        print(f"ERROR: Question {question_id} not found after retry attempts")
+        await state.clear()
+        await message.answer(t("question_not_found", lang))
+        return
+
+    # Now add reply to the question
     print(f"DEBUG: Adding reply to question {question_id}")
     success = await add_question_reply(question_id, message.text)
     print(f"DEBUG: add_question_reply returned: {success}")
 
     if not success:
-        await state.clear()
-        await message.answer(t("question_not_found", lang))
-        return
-
-    # Get question to send notification to student
-    # By this time (after user typed reply), the question should be in DB
-    import asyncio
-    question = None
-    for attempt in range(3):
-        question = await get_question_by_id(question_id)
-        if question:
-            break
-        if attempt < 2:
-            await asyncio.sleep(0.5)  # Wait longer since this isn't time-critical
-
-    # DEBUG: Log question retrieval result
-    if not question:
-        print(f"ERROR: Question {question_id} not found after retry attempts")
-    else:
-        print(f"DEBUG: Question {question_id} found. Student attached: {question.student is not None}, telegram_id: {question.student_telegram_id}")
+        print(f"ERROR: Failed to add reply to question {question_id}")
+        # Continue anyway - we already have the question object for notification
 
     # Send reply to student using telegram_id (works even if Student object is not linked)
     if question and question.student_telegram_id:
