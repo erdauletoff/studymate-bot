@@ -256,7 +256,7 @@ def get_materials_count_by_topics(topics) -> dict:
 # ==================== QUESTIONS ====================
 
 @sync_to_async(thread_sensitive=True)
-def create_question(mentor, text: str, student=None, message_id=None):
+def create_question(mentor, text: str, student=None, message_id=None, student_telegram_id=None):
     from django.db import connection
     try:
         # Create the question
@@ -264,7 +264,8 @@ def create_question(mentor, text: str, student=None, message_id=None):
             mentor=mentor,
             text=text,
             student=student,
-            message_id=message_id
+            message_id=message_id,
+            student_telegram_id=student_telegram_id
         )
 
         # Verify the question was saved

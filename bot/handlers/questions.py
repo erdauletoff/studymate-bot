@@ -57,8 +57,14 @@ async def receive_question(message: Message, state: FSMContext, bot: Bot):
     # Get student for tracking in admin panel
     student = await get_student_by_telegram_id(message.from_user.id)
 
-    # Create question with message_id for reply functionality
-    question = await create_question(mentor, message.text, student, message.message_id)
+    # Create question with message_id and telegram_id for reply functionality
+    question = await create_question(
+        mentor,
+        message.text,
+        student,
+        message.message_id,
+        message.from_user.id  # Always save telegram_id for replies
+    )
 
     # Get question ID explicitly
     question_id = question.id
@@ -159,13 +165,19 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
         if attempt < 2:
             await asyncio.sleep(0.5)  # Wait longer since this isn't time-critical
 
-    # Send reply to student if they are linked
-    if question and question.student:
-        student_lang = await get_user_language(question.student.telegram_id)
+    # DEBUG: Log question retrieval result
+    if not question:
+        print(f"ERROR: Question {question_id} not found after retry attempts")
+    else:
+        print(f"DEBUG: Question {question_id} found. Student attached: {question.student is not None}, telegram_id: {question.student_telegram_id}")
+
+    # Send reply to student using telegram_id (works even if Student object is not linked)
+    if question and question.student_telegram_id:
+        student_lang = await get_user_language(question.student_telegram_id)
         try:
             # Use reply_to_message_id if we have the original message
             reply_params = {
-                "chat_id": question.student.telegram_id,
+                "chat_id": question.student_telegram_id,
                 "text": t("mentor_reply", student_lang, text=message.text),
                 "parse_mode": "HTML"
             }
@@ -173,10 +185,10 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
             if question.message_id:
                 # Reply to original question message
                 reply_params["reply_to_message_id"] = question.message_id
-                print(f"DEBUG: Replying to message_id {question.message_id} in chat {question.student.telegram_id}")
+                print(f"DEBUG: Replying to message_id {question.message_id} in chat {question.student_telegram_id}")
 
             await bot.send_message(**reply_params)
-            print(f"DEBUG: Successfully sent reply to student {question.student.telegram_id}")
+            print(f"DEBUG: Successfully sent reply to student {question.student_telegram_id}")
         except Exception as e:
             # Student may have blocked the bot or deleted their account
             print(f"ERROR: Failed to send reply to student: {e}")

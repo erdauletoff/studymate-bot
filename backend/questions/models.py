@@ -6,6 +6,7 @@ from backend.students.models import Student
 class Question(models.Model):
     mentor = models.ForeignKey(Mentor, on_delete=models.CASCADE, related_name='questions')
     student = models.ForeignKey(Student, on_delete=models.SET_NULL, null=True, blank=True, related_name='questions', verbose_name="Student (Anonymous)")
+    student_telegram_id = models.BigIntegerField(null=True, blank=True, verbose_name="Student's Telegram ID")
     text = models.TextField(verbose_name="Question Text")
     reply_text = models.TextField(verbose_name="Reply Text", blank=True, default='')
     is_answered = models.BooleanField(default=False, verbose_name="Answered")

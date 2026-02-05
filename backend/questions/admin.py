@@ -6,12 +6,12 @@ from .models import Question
 class QuestionAdmin(admin.ModelAdmin):
     list_display = ('short_text', 'student_info', 'mentor', 'has_reply', 'is_answered', 'created_at')
     list_filter = ('mentor', 'is_answered', 'created_at')
-    search_fields = ('text', 'reply_text', 'student__first_name', 'student__last_name', 'student__username')
-    readonly_fields = ('created_at', 'replied_at', 'student')
+    search_fields = ('text', 'reply_text', 'student__first_name', 'student__last_name', 'student__username', 'student_telegram_id')
+    readonly_fields = ('created_at', 'replied_at', 'student', 'student_telegram_id', 'message_id')
     actions = ['mark_as_answered']
     fieldsets = (
         ('Question', {
-            'fields': ('mentor', 'student', 'text', 'created_at')
+            'fields': ('mentor', 'student', 'student_telegram_id', 'text', 'created_at', 'message_id')
         }),
         ('Reply', {
             'fields': ('reply_text', 'replied_at', 'is_answered')
@@ -27,6 +27,8 @@ class QuestionAdmin(admin.ModelAdmin):
             name = f"{obj.student.first_name} {obj.student.last_name}".strip()
             username = f"@{obj.student.username}" if obj.student.username else ""
             return f"{name} {username}".strip() or f"ID: {obj.student.telegram_id}"
+        elif obj.student_telegram_id:
+            return f"Anonymous (TG ID: {obj.student_telegram_id})"
         return "Unknown"
     student_info.short_description = 'Student'
 
