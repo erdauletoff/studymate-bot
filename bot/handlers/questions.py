@@ -58,6 +58,7 @@ async def receive_question(message: Message, state: FSMContext, bot: Bot):
         return
 
     student_telegram_id = message.from_user.id
+    student_message_id = message.message_id  # Save for reply threading
     student = await get_student_by_telegram_id(student_telegram_id)
 
     # Save question to DB (for admin panel tracking)
@@ -65,18 +66,19 @@ async def receive_question(message: Message, state: FSMContext, bot: Bot):
         mentor=mentor,
         text=message.text,
         student=student,
-        message_id=message.message_id,
+        message_id=student_message_id,
         student_telegram_id=student_telegram_id
     )
     question_id = question.id
-    print(f"[QUESTION] Created #{question_id} from student {student_telegram_id} to mentor {mentor.telegram_id}")
+    print(f"[QUESTION] Created #{question_id} from student {student_telegram_id} (msg:{student_message_id}) to mentor {mentor.telegram_id}")
 
     # Get mentor's language
     mentor_lang = await get_user_language(mentor.telegram_id)
 
-    # CRITICAL: Store student_telegram_id in callback_data!
-    # This avoids ALL database query issues when replying
-    callback_data = f"reply_{question_id}_{student_telegram_id}"
+    # CRITICAL: Store all data in callback_data for reply!
+    # Format: reply_{question_id}_{student_telegram_id}_{message_id}
+    # This allows sending reply as a thread to the original question
+    callback_data = f"reply_{question_id}_{student_telegram_id}_{student_message_id}"
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t("btn_reply", mentor_lang), callback_data=callback_data)]
@@ -103,20 +105,21 @@ async def question_reply_start(callback: CallbackQuery, state: FSMContext):
         return
     lang = await get_user_language(callback.from_user.id)
 
-    # Parse callback_data: "reply_{question_id}_{student_telegram_id}"
+    # Parse callback_data: "reply_{question_id}_{student_telegram_id}_{message_id}"
     parts = callback.data.split("_")
 
-    if len(parts) >= 3:
-        # New format: reply_123_456789
-        question_id = int(parts[1])
-        student_telegram_id = int(parts[2])
-    else:
-        # Old format: reply_123 (fallback, may not work for old messages)
-        question_id = int(parts[1])
-        student_telegram_id = None
-        print(f"[QUESTION] Warning: Old callback format for question #{question_id}, student_telegram_id not available")
+    question_id = int(parts[1]) if len(parts) > 1 else None
+    student_telegram_id = int(parts[2]) if len(parts) > 2 else None
+    student_message_id = int(parts[3]) if len(parts) > 3 else None
 
-    print(f"[QUESTION] Mentor {callback.from_user.id} starting reply to #{question_id}, student: {student_telegram_id}")
+    if not question_id:
+        await callback.answer(t("error", lang))
+        return
+
+    if not student_telegram_id:
+        print(f"[QUESTION] Warning: Old callback format for question #{question_id}, student data not available")
+
+    print(f"[QUESTION] Mentor {callback.from_user.id} starting reply to #{question_id}, student: {student_telegram_id}, msg_id: {student_message_id}")
 
     # Extract question text from the message (no DB query needed)
     message_text = callback.message.text or callback.message.caption or ""
@@ -127,6 +130,7 @@ async def question_reply_start(callback: CallbackQuery, state: FSMContext):
     await state.update_data(
         question_id=question_id,
         student_telegram_id=student_telegram_id,
+        student_message_id=student_message_id,
         question_text=question_text
     )
 
@@ -157,16 +161,16 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
     data = await state.get_data()
     question_id = data.get("question_id")
     student_telegram_id = data.get("student_telegram_id")
+    student_message_id = data.get("student_message_id")
 
-    print(f"[QUESTION] Mentor {message.from_user.id} replying to #{question_id}, sending to student {student_telegram_id}")
+    print(f"[QUESTION] Mentor {message.from_user.id} replying to #{question_id}, sending to student {student_telegram_id} (reply_to: {student_message_id})")
 
     if not question_id:
         await state.clear()
         await message.answer(t("error", lang))
         return
 
-    # Save reply to DB (async, for admin panel - don't wait for result)
-    # This is fire-and-forget, the main goal is sending message to student
+    # Save reply to DB (async, for admin panel - don't block on failure)
     try:
         await add_question_reply(question_id, message.text)
         print(f"[QUESTION] Reply saved to DB for question #{question_id}")
@@ -174,18 +178,27 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
         print(f"[QUESTION] Warning: Failed to save reply to DB: {e}")
         # Continue anyway - sending to student is more important!
 
-    # MAIN GOAL: Send reply to student
+    # MAIN GOAL: Send reply to student with threading (reply_to_message_id)
     reply_sent = False
     if student_telegram_id:
         student_lang = await get_user_language(student_telegram_id)
         try:
-            await bot.send_message(
-                chat_id=student_telegram_id,
-                text=t("mentor_reply", student_lang, text=message.text),
-                parse_mode="HTML"
-            )
+            # Build message params
+            send_params = {
+                "chat_id": student_telegram_id,
+                "text": t("mentor_reply", student_lang, text=message.text),
+                "parse_mode": "HTML"
+            }
+
+            # Add reply_to_message_id for threading if available
+            if student_message_id:
+                send_params["reply_to_message_id"] = student_message_id
+                # Allow sending even if original message was deleted
+                send_params["allow_sending_without_reply"] = True
+
+            await bot.send_message(**send_params)
             reply_sent = True
-            print(f"[QUESTION] Reply sent to student {student_telegram_id}")
+            print(f"[QUESTION] Reply sent to student {student_telegram_id} (threaded: {bool(student_message_id)})")
         except Exception as e:
             print(f"[QUESTION] ERROR: Failed to send reply to student {student_telegram_id}: {e}")
     else:

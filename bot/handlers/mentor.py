@@ -361,6 +361,7 @@ async def view_questions(message: Message, state: FSMContext):
 
 class MessageStates(StatesGroup):
     waiting_message = State()
+    waiting_broadcast = State()
 
 
 @router.message(F.text.in_(["✉️ Написать ученику", "✉️ Oqıwshıǵa jazıw", "✉️ Message Student"]))
@@ -398,13 +399,57 @@ async def message_students_page(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "msgstudent_cancel")
+async def message_students_cancel(callback: CallbackQuery, state: FSMContext):
+    """Cancel student selection"""
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+    await state.clear()
+    await callback.message.delete()
+    await callback.answer(t("cancelled", lang))
+
+
+@router.callback_query(F.data == "msgstudent_all")
+async def select_broadcast_to_all(callback: CallbackQuery, state: FSMContext):
+    """Mentor wants to send message to all students"""
+    if not await is_mentor(callback.from_user.id):
+        return
+    lang = await get_user_language(callback.from_user.id)
+
+    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
+    students = await get_students_by_mentor(mentor)
+
+    if not students:
+        await callback.answer(t("no_students", lang))
+        return
+
+    # Save to FSM that this is broadcast mode
+    await state.set_state(MessageStates.waiting_broadcast)
+    await state.update_data(broadcast=True, student_count=len(students))
+
+    # Ask mentor to write broadcast message
+    await callback.message.answer(
+        t("write_broadcast_message", lang, count=len(students)),
+        parse_mode="HTML",
+        reply_markup=cancel_menu(lang)
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("msgstudent_"))
 async def select_student_for_message(callback: CallbackQuery, state: FSMContext):
     if not await is_mentor(callback.from_user.id):
         return
     lang = await get_user_language(callback.from_user.id)
 
-    student_id = int(callback.data.replace("msgstudent_", ""))
+    student_id_str = callback.data.replace("msgstudent_", "")
+
+    # Skip if it's a special callback (all, cancel)
+    if not student_id_str.isdigit():
+        return
+
+    student_id = int(student_id_str)
 
     # Get student from DB
     from bot.db import get_student_by_id
@@ -414,9 +459,13 @@ async def select_student_for_message(callback: CallbackQuery, state: FSMContext)
         await callback.answer(t("student_not_found", lang))
         return
 
-    # Save student_id to FSM
+    # Save student_id and telegram_id to FSM
     await state.set_state(MessageStates.waiting_message)
-    await state.update_data(student_id=student_id)
+    await state.update_data(
+        student_id=student_id,
+        student_telegram_id=student.telegram_id,
+        student_name=student.full_name or f"{student.first_name} {student.last_name}".strip() or f"ID: {student.telegram_id}"
+    )
 
     # Show student name
     student_name = student.full_name or f"{student.first_name} {student.last_name}".strip() or f"ID: {student.telegram_id}"
@@ -439,48 +488,100 @@ async def receive_message_to_student(message: Message, state: FSMContext, bot: B
     # Check for cancel
     if message.text in ["❌ Отмена", "❌ Biykar etiw", "❌ Cancel"]:
         await state.clear()
-        mentor = await get_mentor_by_telegram_id(message.from_user.id)
         await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
         return
 
-    # Get student_id from FSM
+    # Get data from FSM
     data = await state.get_data()
-    student_id = data.get("student_id")
+    student_telegram_id = data.get("student_telegram_id")
+    student_name = data.get("student_name")
 
-    if not student_id:
+    if not student_telegram_id:
         await state.clear()
         await message.answer(t("error", lang))
         return
 
-    # Get student from DB
-    from bot.db import get_student_by_id
-    student = await get_student_by_id(student_id)
-
-    if not student:
-        await state.clear()
-        await message.answer(t("student_not_found", lang))
-        return
-
     # Send message to student
-    student_lang = await get_user_language(student.telegram_id)
+    student_lang = await get_user_language(student_telegram_id)
     try:
         await bot.send_message(
-            student.telegram_id,
+            student_telegram_id,
             t("mentor_message", student_lang, text=message.text),
             parse_mode="HTML"
         )
 
-        # Confirm to mentor
-        student_name = student.full_name or f"{student.first_name} {student.last_name}".strip() or f"ID: {student.telegram_id}"
         await state.clear()
         await message.answer(
             t("message_sent_to_student", lang, name=student_name),
             reply_markup=mentor_menu(lang)
         )
     except Exception as e:
-        # Student may have blocked the bot or deleted their account
+        print(f"[MESSAGE] Failed to send to student {student_telegram_id}: {e}")
         await state.clear()
         await message.answer(
-            t("error", lang),
+            t("message_not_delivered", lang, name=student_name),
             reply_markup=mentor_menu(lang)
         )
+
+
+@router.message(MessageStates.waiting_broadcast)
+async def receive_broadcast_message(message: Message, state: FSMContext, bot: Bot):
+    """Mentor sends broadcast message to all students"""
+    if not await is_mentor(message.from_user.id):
+        return
+    lang = await get_user_language(message.from_user.id)
+
+    # Check for cancel
+    if message.text in ["❌ Отмена", "❌ Biykar etiw", "❌ Cancel"]:
+        await state.clear()
+        await message.answer(t("cancelled", lang), reply_markup=mentor_menu(lang))
+        return
+
+    # Get mentor's students
+    mentor = await get_mentor_by_telegram_id(message.from_user.id)
+    students = await get_students_by_mentor(mentor)
+
+    if not students:
+        await state.clear()
+        await message.answer(t("no_students", lang), reply_markup=mentor_menu(lang))
+        return
+
+    # Send message to all students
+    sent_count = 0
+    failed_count = 0
+
+    status_msg = await message.answer(t("sending_broadcast", lang, sent=0, total=len(students)))
+
+    for i, student in enumerate(students):
+        student_lang = await get_user_language(student.telegram_id)
+        try:
+            await bot.send_message(
+                student.telegram_id,
+                t("mentor_message", student_lang, text=message.text),
+                parse_mode="HTML"
+            )
+            sent_count += 1
+        except Exception as e:
+            print(f"[BROADCAST] Failed to send to student {student.telegram_id}: {e}")
+            failed_count += 1
+
+        # Update status every 5 students
+        if (i + 1) % 5 == 0 or i == len(students) - 1:
+            try:
+                await status_msg.edit_text(t("sending_broadcast", lang, sent=sent_count, total=len(students)))
+            except:
+                pass
+
+    await state.clear()
+
+    # Final report
+    if failed_count > 0:
+        await status_msg.edit_text(
+            t("broadcast_complete_partial", lang, sent=sent_count, failed=failed_count)
+        )
+    else:
+        await status_msg.edit_text(
+            t("broadcast_complete", lang, sent=sent_count)
+        )
+
+    await message.answer(t("back_to_menu", lang), reply_markup=mentor_menu(lang))
