@@ -147,7 +147,9 @@ async def receive_reply(message: Message, state: FSMContext, bot: Bot):
         return
 
     # Add reply to question (works even without fetching the object)
+    print(f"DEBUG: Adding reply to question {question_id}")
     success = await add_question_reply(question_id, message.text)
+    print(f"DEBUG: add_question_reply returned: {success}")
 
     if not success:
         await state.clear()

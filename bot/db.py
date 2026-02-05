@@ -257,31 +257,35 @@ def get_materials_count_by_topics(topics) -> dict:
 
 @sync_to_async(thread_sensitive=True)
 def create_question(mentor, text: str, student=None, message_id=None, student_telegram_id=None):
-    from django.db import connection
+    from django.db import transaction, connection
     try:
-        # Create the question
-        question = Question.objects.create(
-            mentor=mentor,
-            text=text,
-            student=student,
-            message_id=message_id,
-            student_telegram_id=student_telegram_id
-        )
+        # Use atomic transaction to ensure immediate visibility
+        with transaction.atomic():
+            # Create the question
+            question = Question.objects.create(
+                mentor=mentor,
+                text=text,
+                student=student,
+                message_id=message_id,
+                student_telegram_id=student_telegram_id
+            )
 
-        # Verify the question was saved
-        question_id = question.id
-        if question_id is None:
-            raise ValueError("Question ID is None after creation!")
+            # Verify the question was saved
+            question_id = question.id
+            if question_id is None:
+                raise ValueError("Question ID is None after creation!")
 
-        # CRITICAL: Force commit for Heroku connection pooling
-        # Ensure the transaction is visible to other connections
-        if connection.in_atomic_block:
-            print(f"DEBUG create_question: Warning - in atomic block, commit may be delayed")
+            print(f"DEBUG create_question: Created question ID {question_id}, mentor={mentor.id}, text_length={len(text)}, message_id={message_id}, student_telegram_id={student_telegram_id}")
 
-        # Force a database flush to ensure write is committed
-        connection.commit()
+        # Transaction is committed here (exiting atomic block)
+        # Force additional commit for Heroku connection pooling compatibility
+        try:
+            connection.commit()
+        except Exception as commit_error:
+            # commit() may fail if already committed by atomic block - this is OK
+            print(f"DEBUG create_question: Post-atomic commit note: {commit_error}")
 
-        print(f"DEBUG create_question: Created and committed question ID {question_id}, mentor={mentor.id}, text_length={len(text)}, message_id={message_id}")
+        print(f"DEBUG create_question: Question {question_id} committed and ready")
 
         # Return the question with all fields populated
         return question
@@ -348,23 +352,64 @@ def get_question_by_id(question_id: int):
         return None
 
 
-@sync_to_async
+@sync_to_async(thread_sensitive=True)
 def add_question_reply(question_id: int, reply_text: str) -> bool:
     """Add or append reply to a question"""
-    try:
-        question = Question.objects.get(id=question_id)
-        if question.reply_text:
-            # Append to existing reply
-            question.reply_text += f"\n\n---\n\n{reply_text}"
-        else:
-            # First reply
-            question.reply_text = reply_text
-        question.is_answered = True
-        question.replied_at = timezone.now()
-        question.save()
-        return True
-    except Question.DoesNotExist:
-        return False
+    from django.db import connection
+    import time
+
+    # Retry logic for Heroku connection pooling issues
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"DEBUG add_question_reply: Attempt {attempt + 1}/{max_retries} to get question {question_id}")
+
+            # Check if question exists
+            exists = Question.objects.filter(id=question_id).exists()
+            print(f"DEBUG add_question_reply: Question {question_id} exists: {exists}")
+
+            if not exists:
+                if attempt < max_retries - 1:
+                    wait_time = 0.2 * (attempt + 1)  # 0.2s, 0.4s
+                    print(f"DEBUG add_question_reply: Question not found, waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"ERROR add_question_reply: Question {question_id} not found after {max_retries} retries")
+                    return False
+
+            # Question exists, get and update it
+            question = Question.objects.get(id=question_id)
+            if question.reply_text:
+                # Append to existing reply
+                question.reply_text += f"\n\n---\n\n{reply_text}"
+            else:
+                # First reply
+                question.reply_text = reply_text
+            question.is_answered = True
+            question.replied_at = timezone.now()
+            question.save()
+
+            # Force commit for Heroku connection pooling
+            connection.commit()
+            print(f"DEBUG add_question_reply: Successfully added reply to question {question_id}")
+            return True
+
+        except Question.DoesNotExist:
+            if attempt < max_retries - 1:
+                wait_time = 0.2 * (attempt + 1)
+                print(f"DEBUG add_question_reply: DoesNotExist, waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+            else:
+                print(f"ERROR add_question_reply: Question {question_id} DoesNotExist after {max_retries} retries")
+                return False
+        except Exception as e:
+            print(f"ERROR add_question_reply: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+    return False
 
 
 # ==================== DOWNLOADS ====================
