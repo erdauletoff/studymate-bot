@@ -42,6 +42,7 @@ class QuizQuestion(models.Model):
     option_d = models.CharField(max_length=500)
     correct_answer = models.CharField(max_length=1)
     order = models.PositiveIntegerField(default=0)
+    time_bonus = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         verbose_name = "Quiz Question"

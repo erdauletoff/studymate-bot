@@ -551,7 +551,7 @@ def quiz_title_exists(mentor, title: str) -> bool:
 
 
 @sync_to_async
-def create_quiz_question(quiz, question_text, option_a, option_b, option_c, option_d, correct_answer, order):
+def create_quiz_question(quiz, question_text, option_a, option_b, option_c, option_d, correct_answer, order, time_bonus: int = 0):
     return QuizQuestion.objects.create(
         quiz=quiz,
         question_text=question_text,
@@ -560,7 +560,8 @@ def create_quiz_question(quiz, question_text, option_a, option_b, option_c, opti
         option_c=option_c,
         option_d=option_d,
         correct_answer=correct_answer,
-        order=order
+        order=order,
+        time_bonus=time_bonus
     )
 
 

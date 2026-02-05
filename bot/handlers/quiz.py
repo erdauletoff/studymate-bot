@@ -813,7 +813,8 @@ async def quiz_publish_practice(callback: CallbackQuery, state: FSMContext):
             option_c=q["option_c"],
             option_d=q["option_d"],
             correct_answer=q["correct"],
-            order=i
+            order=i,
+            time_bonus=q.get("time_bonus", 0)
         )
 
     await state.clear()
@@ -978,7 +979,8 @@ async def save_ranked_quiz(callback, state: FSMContext, lang: str, bot: Bot, edi
             option_c=q["option_c"],
             option_d=q["option_d"],
             correct_answer=q["correct"],
-            order=i
+            order=i,
+            time_bonus=q.get("time_bonus", 0)
         )
 
     await state.clear()
@@ -2103,8 +2105,11 @@ async def show_question(message, question, current: int, total: int, lang: str, 
         InlineKeyboardButton(text="D", callback_data=f"ans_{attempt_id}_{question.id}_D"),
     ]]
 
+    time_bonus = getattr(question, "time_bonus", 0) or 0
+    total_timeout = QUESTION_TIMEOUT + time_bonus
+
     # Show question with initial timer
-    text_with_timer = base_text + f"\n\n⏱ {QUESTION_TIMEOUT} {t('quiz_seconds', lang)}"
+    text_with_timer = base_text + f"\n\n⏱ {total_timeout} {t('quiz_seconds', lang)}"
 
     if edit:
         sent_message = await message.edit_text(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
@@ -2129,7 +2134,7 @@ async def show_question(message, question, current: int, total: int, lang: str, 
 
     # Single time source
     start_time = time.monotonic()
-    end_time = start_time + QUESTION_TIMEOUT
+    end_time = start_time + total_timeout
 
     # Start countdown updater task
     countdown_task = asyncio.create_task(

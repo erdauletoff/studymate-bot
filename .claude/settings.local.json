@@ -20,7 +20,9 @@
       "Bash(python manage.py shell:*)",
       "Bash(python:*)",
       "Bash(ls:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(}\" was ignored\\)\n\nExample after:\n  Question: \"Bul jerde qanday selektor qollanıladı?nh1 { color: blue)",
+      "Bash(}\"\n\nThis allows questions with CSS/HTML/JS code examples to be\nproperly displayed to students during quizzes.\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

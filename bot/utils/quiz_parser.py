@@ -45,14 +45,15 @@ def parse_quiz_file(content: str) -> dict:
     # Join remaining content and split by question numbers
     content = '\n'.join(lines)
 
-    # Pattern to match questions starting with number and dot
-    question_pattern = r'(\d+)\.\s*(.+?)(?=\n\d+\.|$)'
+    # Pattern to match questions starting with number + optional difficulty markers (#/##) + dot
+    # Examples: "1.", "2#.", "3##."
+    question_pattern = r'(\d+)(#{1,2})?\.\s*(.+?)(?=\n\d+(?:#{1,2})?\.|$)'
     questions_raw = re.findall(question_pattern, content, re.DOTALL)
 
     if not questions_raw:
         raise ValueError("No questions found in file")
 
-    for q_num, q_content in questions_raw:
+    for q_num, q_marks, q_content in questions_raw:
         q_lines = q_content.strip().split('\n')
 
         if len(q_lines) < 2:
@@ -114,13 +115,20 @@ def parse_quiz_file(content: str) -> dict:
         if correct_answer is None:
             raise ValueError(f"Question {q_num} has no correct answer marked with *")
 
+        time_bonus = 0
+        if q_marks == "#":
+            time_bonus = 5
+        elif q_marks == "##":
+            time_bonus = 10
+
         result["questions"].append({
             "text": question_text,
             "option_a": options["A"],
             "option_b": options["B"],
             "option_c": options["C"],
             "option_d": options["D"],
-            "correct": correct_answer
+            "correct": correct_answer,
+            "time_bonus": time_bonus
         })
 
     if not result["questions"]:
