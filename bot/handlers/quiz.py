@@ -708,6 +708,7 @@ async def receive_quiz_file(message: Message, state: FSMContext, bot: Bot):
 
     if await quiz_title_exists(mentor, title):
         buttons = [
+            [InlineKeyboardButton(text=t("btn_view_all_questions", lang), callback_data="quizpreview_all_0")],
             [InlineKeyboardButton(text=t("btn_replace_quiz", lang), callback_data="quizconfirm_replace")],
             [InlineKeyboardButton(text=t("btn_copy_quiz", lang), callback_data="quizconfirm_copy")],
             [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
@@ -720,6 +721,7 @@ async def receive_quiz_file(message: Message, state: FSMContext, bot: Bot):
         return
 
     buttons = [
+        [InlineKeyboardButton(text=t("btn_view_all_questions", lang), callback_data="quizpreview_all_0")],
         [InlineKeyboardButton(text=t("btn_save_quiz", lang), callback_data="quizconfirm_continue")],
         [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
     ]
@@ -744,6 +746,107 @@ async def quiz_confirm_copy(callback: CallbackQuery, state: FSMContext):
     lang = await get_user_language(callback.from_user.id)
     await state.update_data(replace_mode="copy")
     await show_publish_mode_selection(callback, state, lang)
+
+
+@router.callback_query(F.data.startswith("quizpreview_all_"))
+async def show_all_questions(callback: CallbackQuery, state: FSMContext):
+    """Show all quiz questions with pagination"""
+    lang = await get_user_language(callback.from_user.id)
+    data = await state.get_data()
+    parsed = data.get("parsed")
+
+    if not parsed:
+        await callback.answer(t("error", lang))
+        return
+
+    questions = parsed.get("questions", [])
+    if not questions:
+        await callback.answer(t("error", lang))
+        return
+
+    page = int(callback.data.split("_")[-1])
+    per_page = 3  # Show 3 questions per page
+
+    from bot.keyboards.menus import paginate
+    page_questions, nav_buttons, total_pages = paginate(
+        items=questions,
+        page=page,
+        per_page=per_page,
+        callback_prefix="quizpreview_all",
+        lang=lang
+    )
+
+    # Build text for current page
+    text = t("quiz_all_questions_header", lang, current=page + 1, total=total_pages)
+
+    start_num = page * per_page
+    for i, q in enumerate(page_questions, start=start_num + 1):
+        text += t(
+            "quiz_question_item",
+            lang,
+            num=i,
+            text=escape_html(q["text"]),
+            a=escape_html(q["option_a"]),
+            b=escape_html(q["option_b"]),
+            c=escape_html(q["option_c"]),
+            d=escape_html(q["option_d"]),
+            correct=q["correct"].upper()
+        )
+
+    # Build keyboard
+    buttons = []
+    if nav_buttons:
+        buttons.append(nav_buttons)
+    buttons.append([InlineKeyboardButton(text=t("btn_back_to_preview", lang), callback_data="quizpreview_back")])
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "quizpreview_back")
+async def back_to_preview(callback: CallbackQuery, state: FSMContext):
+    """Return to quiz preview from all questions view"""
+    lang = await get_user_language(callback.from_user.id)
+    data = await state.get_data()
+    parsed = data.get("parsed")
+    title = data.get("title")
+
+    if not parsed or not title:
+        await callback.answer(t("error", lang))
+        return
+
+    preview_text = build_quiz_preview_text(parsed, title, lang)
+    mentor = await get_mentor_by_telegram_id(callback.from_user.id)
+
+    if await quiz_title_exists(mentor, title):
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_view_all_questions", lang), callback_data="quizpreview_all_0")],
+            [InlineKeyboardButton(text=t("btn_replace_quiz", lang), callback_data="quizconfirm_replace")],
+            [InlineKeyboardButton(text=t("btn_copy_quiz", lang), callback_data="quizconfirm_copy")],
+            [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
+        ]
+        await callback.message.edit_text(
+            t("quiz_duplicate_found", lang, title=title) + "\n\n" + preview_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML"
+        )
+    else:
+        buttons = [
+            [InlineKeyboardButton(text=t("btn_view_all_questions", lang), callback_data="quizpreview_all_0")],
+            [InlineKeyboardButton(text=t("btn_save_quiz", lang), callback_data="quizconfirm_continue")],
+            [InlineKeyboardButton(text=t("btn_cancel_quiz", lang), callback_data="quizcancel")]
+        ]
+        await callback.message.edit_text(
+            preview_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+            parse_mode="HTML"
+        )
+
+    await callback.answer()
 
 
 async def show_publish_mode_selection(callback: CallbackQuery, state: FSMContext, lang: str):
