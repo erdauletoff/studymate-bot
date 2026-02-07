@@ -19,6 +19,26 @@ from backend.downloads.models import Download
 from backend.quizzes.models import Quiz, QuizQuestion, QuizAttempt, QuizAnswer
 
 
+# ==================== TEST ACCOUNTS ====================
+
+def get_test_student_ids() -> set:
+    """
+    Get set of test student Telegram IDs that should be excluded from:
+    - Leaderboards (global and seasonal)
+    - Statistics counts
+    - Rating calculations
+    """
+    ids_str = os.environ.get('TEST_STUDENT_IDS', '')
+    if not ids_str:
+        return set()
+    return {int(id.strip()) for id in ids_str.split(',') if id.strip().isdigit()}
+
+
+def is_test_student(telegram_id: int) -> bool:
+    """Check if student is a test account"""
+    return telegram_id in get_test_student_ids()
+
+
 # ==================== LANGUAGE ====================
 
 @sync_to_async
@@ -427,22 +447,35 @@ def get_mentor_stats(mentor):
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_ago = today - timedelta(days=7)
 
-    students_count = Student.objects.filter(mentor=mentor).count()
+    # Exclude test students from counts
+    test_ids = get_test_student_ids()
+    students_qs = Student.objects.filter(mentor=mentor)
+    if test_ids:
+        students_qs = students_qs.exclude(telegram_id__in=test_ids)
+    students_count = students_qs.count()
+
     topics_count = Topic.objects.filter(mentor=mentor).count()
     materials_count = Material.objects.filter(topic__mentor=mentor).count()
 
     questions_total = Question.objects.filter(mentor=mentor).count()
     questions_unanswered = Question.objects.filter(mentor=mentor, is_answered=False).count()
 
-    active_today = Download.objects.filter(
+    # Exclude test students from activity stats
+    active_today_qs = Download.objects.filter(
         material__topic__mentor=mentor,
         downloaded_at__gte=today
-    ).values('student').distinct().count()
+    )
+    if test_ids:
+        active_today_qs = active_today_qs.exclude(student__telegram_id__in=test_ids)
+    active_today = active_today_qs.values('student').distinct().count()
 
-    active_week = Download.objects.filter(
+    active_week_qs = Download.objects.filter(
         material__topic__mentor=mentor,
         downloaded_at__gte=week_ago
-    ).values('student').distinct().count()
+    )
+    if test_ids:
+        active_week_qs = active_week_qs.exclude(student__telegram_id__in=test_ids)
+    active_week = active_week_qs.values('student').distinct().count()
 
     from django.db.models import Count
     popular = Material.objects.filter(
@@ -909,6 +942,7 @@ def get_global_leaderboard(mentor, limit=10):
     Get global leaderboard for students based on RANKED quiz performance only.
     Returns list of (student, rating_score, avg_percentage, total_quizzes) ordered by rating.
     Only includes students who have completed at least one ranked quiz.
+    Excludes test student accounts (configured in TEST_STUDENT_IDS).
 
     Only counts attempts where:
     - quiz.quiz_type == 'ranked'
@@ -919,6 +953,9 @@ def get_global_leaderboard(mentor, limit=10):
     """
     from django.db.models import F
     from collections import defaultdict
+
+    # Get test student IDs to exclude
+    test_ids = get_test_student_ids()
 
     # Get all valid ranked attempts in one query
     valid_attempts = QuizAttempt.objects.filter(
@@ -941,9 +978,9 @@ def get_global_leaderboard(mentor, limit=10):
     if not student_stats:
         return []
 
-    # Get student objects
+    # Get student objects (exclude test accounts)
     student_ids = list(student_stats.keys())
-    students_map = {s.id: s for s in Student.objects.filter(id__in=student_ids)}
+    students_map = {s.id: s for s in Student.objects.filter(id__in=student_ids) if s.telegram_id not in test_ids}
 
     # Calculate ratings
     results = []
@@ -1103,16 +1140,24 @@ def get_season_leaderboard(season, limit=100):
     """
     Get leaderboard for a specific season.
     Returns list of (student, rating_score, avg_percentage, total_quizzes)
+    Excludes test student accounts.
     """
+    test_ids = get_test_student_ids()
+
     ratings = SeasonRating.objects.filter(
         season=season,
         rating_score__gt=0
-    ).select_related('student').order_by('-rating_score')[:limit]
+    ).select_related('student').order_by('-rating_score')
 
-    return [
-        (r.student, r.rating_score, r.avg_percentage, r.total_ranked_quizzes)
-        for r in ratings
-    ]
+    # Filter out test accounts and apply limit
+    results = []
+    for r in ratings:
+        if r.student.telegram_id not in test_ids:
+            results.append((r.student, r.rating_score, r.avg_percentage, r.total_ranked_quizzes))
+            if len(results) >= limit:
+                break
+
+    return results
 
 
 @sync_to_async
@@ -1120,9 +1165,14 @@ def update_season_rating(student, quiz_attempt):
     """
     Update student's rating in current season after quiz completion.
     Called after finish_quiz_attempt.
+    Skips test student accounts.
     """
     if quiz_attempt.quiz.quiz_type != 'ranked':
         return  # Only ranked quizzes affect season rating
+
+    # Skip test accounts
+    if is_test_student(student.telegram_id):
+        return
 
     # Get current season
     mentor = quiz_attempt.quiz.mentor
