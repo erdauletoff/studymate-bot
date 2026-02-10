@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 QUESTION_TIMEOUT = 20  # seconds per question
 QUESTIONS_PER_PAGE = 5
 ANSWERS_PER_PAGE = 10  # answers per review page
-QUIZ_SESSION_TIMEOUT = 420  # 7 minutes - auto-reset quiz state
+QUIZ_SESSION_TIMEOUT = 900  # 9 minutes - auto-reset quiz state
 LEADERBOARD_PER_PAGE = 10  # students per page in mentor leaderboard
 
 # Store active timers: {attempt_id: (timeout_task, countdown_task)}
