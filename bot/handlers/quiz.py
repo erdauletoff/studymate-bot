@@ -2,6 +2,7 @@ import asyncio
 import csv
 import html
 import io
+import random
 import time
 from aiogram import Router, F, Bot
 from aiogram.exceptions import TelegramBadRequest
@@ -2175,6 +2176,7 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
         return
 
     # Store in FSM
+    from bot.db import is_exam_mode
     await state.set_state(QuizStates.taking_quiz)
     await state.update_data(
         attempt_id=attempt.id,
@@ -2183,7 +2185,8 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
         current_index=0,
         score=0,
         quiz_started_at=time.time(),
-        quiz_type=quiz.quiz_type
+        quiz_type=quiz.quiz_type,
+        is_exam=is_exam_mode(quiz)
     )
 
     # Start session timeout timer (7 minutes)
@@ -2195,14 +2198,44 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.answer()
 
 async def show_question(message, question, current: int, total: int, lang: str, attempt_id: int, state: FSMContext, bot: Bot, edit: bool = False):
+    letters = ["A", "B", "C", "D"]
+    option_map = {
+        "A": question.option_a,
+        "B": question.option_b,
+        "C": question.option_c,
+        "D": question.option_d,
+    }
+
+    data = await state.get_data()
+    is_exam = data.get("is_exam", False)
+
+    if is_exam:
+        shuffled = random.sample(letters, 4)
+        shuffle_map = {display: original for display, original in zip(letters, shuffled)}
+        await state.update_data(shuffle_map=shuffle_map)
+    else:
+        shuffle_map = None
+        await state.update_data(shuffle_map=None)
+
+    if shuffle_map:
+        a_text = escape_html(option_map[shuffle_map["A"]])
+        b_text = escape_html(option_map[shuffle_map["B"]])
+        c_text = escape_html(option_map[shuffle_map["C"]])
+        d_text = escape_html(option_map[shuffle_map["D"]])
+    else:
+        a_text = escape_html(question.option_a)
+        b_text = escape_html(question.option_b)
+        c_text = escape_html(question.option_c)
+        d_text = escape_html(question.option_d)
+
     base_text = t("quiz_question", lang,
              current=current,
              total=total,
              text=escape_html(question.question_text),
-             a=escape_html(question.option_a),
-             b=escape_html(question.option_b),
-             c=escape_html(question.option_c),
-             d=escape_html(question.option_d))
+             a=a_text,
+             b=b_text,
+             c=c_text,
+             d=d_text)
 
     buttons = [[
         InlineKeyboardButton(text="A", callback_data=f"ans_{attempt_id}_{question.id}_A"),
@@ -2437,6 +2470,11 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if not attempt:
         await callback.answer(t("error", lang))
         return
+
+    # Reverse-map shuffled answer back to original letter
+    shuffle_map = data.get("shuffle_map")
+    if shuffle_map:
+        selected = shuffle_map.get(selected, selected)
 
     # Save answer
     is_correct = selected == question.correct_answer
