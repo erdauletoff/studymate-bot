@@ -4,6 +4,7 @@ import html
 import io
 import time
 from aiogram import Router, F, Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -2215,7 +2216,11 @@ async def show_question(message, question, current: int, total: int, lang: str, 
     text_with_timer = base_text + f"\n\n⏱ {total_timeout} {t('quiz_seconds', lang)}"
 
     if edit:
-        sent_message = await message.edit_text(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        try:
+            sent_message = await message.edit_text(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+        except TelegramBadRequest:
+            # Message was deleted by student — send a new one
+            sent_message = await bot.send_message(chat_id=message.chat.id, text=text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
     else:
         sent_message = await message.answer(text_with_timer, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
 
@@ -2239,14 +2244,14 @@ async def show_question(message, question, current: int, total: int, lang: str, 
     start_time = time.monotonic()
     end_time = start_time + total_timeout
 
-    # Start countdown updater task
+    # Start countdown updater task — always use sent_message so countdown targets the actual message
     countdown_task = asyncio.create_task(
-        update_countdown(sent_message if not edit else message, base_text, buttons, end_time, lang)
+        update_countdown(sent_message, base_text, buttons, end_time, lang)
     )
 
     # Start timeout task
     timeout_task = asyncio.create_task(
-        question_timeout(sent_message if not edit else message, attempt_id, question.id, current, total, lang, state, end_time, bot)
+        question_timeout(sent_message, attempt_id, question.id, current, total, lang, state, end_time, bot)
     )
 
     active_timers[attempt_id] = (timeout_task, countdown_task)
@@ -2374,11 +2379,17 @@ async def question_timeout(message, attempt_id: int, question_id: int, current: 
             # Build result text based on quiz mode
             result_text, buttons, show_review = await build_quiz_result_text(attempt_id, score, len(question_ids), lang)
 
-            # Show result
-            if buttons:
-                await message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
-            else:
-                await message.edit_text(result_text, parse_mode="HTML")
+            # Show result (handle deleted message)
+            try:
+                if buttons:
+                    await message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+                else:
+                    await message.edit_text(result_text, parse_mode="HTML")
+            except TelegramBadRequest:
+                if buttons:
+                    await bot.send_message(chat_id=message.chat.id, text=result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+                else:
+                    await bot.send_message(chat_id=message.chat.id, text=result_text, parse_mode="HTML")
         else:
             # Show next question
             await state.update_data(current_index=current_index, score=score)
@@ -2459,11 +2470,17 @@ async def handle_answer(callback: CallbackQuery, state: FSMContext, bot: Bot):
         # Build result text based on quiz mode
         result_text, buttons, show_review = await build_quiz_result_text(attempt_id, score, len(question_ids), lang)
 
-        # Show result
-        if buttons:
-            await callback.message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
-        else:
-            await callback.message.edit_text(result_text, parse_mode="HTML")
+        # Show result (handle deleted message)
+        try:
+            if buttons:
+                await callback.message.edit_text(result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+            else:
+                await callback.message.edit_text(result_text, parse_mode="HTML")
+        except TelegramBadRequest:
+            if buttons:
+                await bot.send_message(chat_id=callback.message.chat.id, text=result_text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+            else:
+                await bot.send_message(chat_id=callback.message.chat.id, text=result_text, parse_mode="HTML")
     else:
         # Show next question
         await state.update_data(current_index=current_index, score=score)
