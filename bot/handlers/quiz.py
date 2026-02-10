@@ -2181,7 +2181,8 @@ async def start_quiz(callback: CallbackQuery, state: FSMContext, bot: Bot):
         quiz_id=quiz.id,
         question_ids=[q.id for q in questions],
         current_index=0,
-        score=0
+        score=0,
+        quiz_started_at=time.time()
     )
 
     # Start session timeout timer (7 minutes)

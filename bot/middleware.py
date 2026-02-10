@@ -42,6 +42,18 @@ class StudentMentorCheckMiddleware(BaseMiddleware):
             current_state = await state.get_state()
             # QuizStates.taking_quiz = "QuizStates:taking_quiz"
             if current_state == "QuizStates:taking_quiz":
+                # Auto-clear stale quiz state (survives bot restarts unlike asyncio tasks)
+                state_data = await state.get_data()
+                quiz_started_at = state_data.get("quiz_started_at", 0)
+                if quiz_started_at and (time.time() - quiz_started_at) > 900:
+                    await state.clear()
+                    return await handler(event, data)
+
+                # Allow /cancel to break out of stuck quiz
+                if isinstance(event, Message):
+                    if event.text and (event.text.startswith('/cancel') or event.text in CANCEL_BUTTON_TEXTS):
+                        return await handler(event, data)
+
                 # During quiz, only allow quiz answer callbacks
                 if isinstance(event, CallbackQuery):
                     if event.data and event.data.startswith("ans_"):
