@@ -49,8 +49,9 @@ class StudentMentorCheckMiddleware(BaseMiddleware):
                     await state.clear()
                     return await handler(event, data)
 
-                # Allow /cancel to break out of stuck quiz
-                if isinstance(event, Message):
+                # Allow /cancel to break out of stuck quiz (only for practice, not ranked)
+                is_ranked = state_data.get("quiz_type") == "ranked"
+                if not is_ranked and isinstance(event, Message):
                     if event.text and (event.text.startswith('/cancel') or event.text in CANCEL_BUTTON_TEXTS):
                         return await handler(event, data)
 
