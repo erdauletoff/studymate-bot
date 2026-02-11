@@ -282,11 +282,11 @@ class SeasonRating(models.Model):
         self.total_possible = aggregates['total_possible'] or 0
 
         # Average percentage
-        self.avg_percentage = (self.total_score / self.total_possible * 100) if self.total_possible > 0 else 0
+        self.avg_percentage = round((self.total_score / self.total_possible * 100), 1) if self.total_possible > 0 else 0
 
         # Rating formula: avg_percentage × (1 + min(total_quizzes/10, 1) × 0.5)
         activity_bonus = min(self.total_ranked_quizzes / 10, 1) * 0.5
-        self.rating_score = self.avg_percentage * (1 + activity_bonus)
+        self.rating_score = round(self.avg_percentage * (1 + activity_bonus), 1)
 
         self.save()
 

@@ -1153,7 +1153,7 @@ def get_season_leaderboard(season, limit=100):
     results = []
     for r in ratings:
         if r.student.telegram_id not in test_ids:
-            results.append((r.student, r.rating_score, r.avg_percentage, r.total_ranked_quizzes))
+            results.append((r.student, round(r.rating_score, 1), round(r.avg_percentage, 1), r.total_ranked_quizzes))
             if len(results) >= limit:
                 break
 
@@ -1201,7 +1201,7 @@ def get_student_season_rank(student, season):
         ).count()
         
         rank = higher_count + 1
-        return (rank, rating.rating_score, rating.avg_percentage, rating.total_ranked_quizzes)
+        return (rank, round(rating.rating_score, 1), round(rating.avg_percentage, 1), rating.total_ranked_quizzes)
     except SeasonRating.DoesNotExist:
         return None
 
