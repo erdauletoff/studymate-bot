@@ -920,7 +920,21 @@ def get_attempt_answers(attempt):
 @sync_to_async
 def delete_quiz_attempts(quiz):
     """Delete all attempts for a quiz (for restart)"""
+    # Collect affected students before deletion (for rating recalc)
+    affected_student_ids = list(
+        QuizAttempt.objects.filter(quiz=quiz)
+        .values_list('student_id', flat=True)
+        .distinct()
+    )
+
     deleted_count = QuizAttempt.objects.filter(quiz=quiz).delete()[0]
+
+    # Recalculate season ratings for affected students
+    if quiz.quiz_type == 'ranked' and affected_student_ids:
+        season = Season.get_or_create_current_season(quiz.mentor)
+        for rating in SeasonRating.objects.filter(season=season, student_id__in=affected_student_ids):
+            rating.recalculate()
+
     return deleted_count
 
 
@@ -965,15 +979,18 @@ def get_global_leaderboard(mentor, limit=10):
         quiz__available_until__isnull=False
     ).filter(
         started_at__lt=F('quiz__available_until')
-    ).select_related('student').values('student_id', 'quiz_id', 'score', 'total')
+    ).select_related('student').values('student_id', 'quiz_id', 'score', 'total', 'finished_at')
 
     # Group by student
-    student_stats = defaultdict(lambda: {'quizzes': set(), 'total_score': 0, 'total_questions': 0})
+    student_stats = defaultdict(lambda: {'quizzes': set(), 'total_score': 0, 'total_questions': 0, 'earliest_finished': None})
     for attempt in valid_attempts:
         student_id = attempt['student_id']
         student_stats[student_id]['quizzes'].add(attempt['quiz_id'])
         student_stats[student_id]['total_score'] += attempt['score']
         student_stats[student_id]['total_questions'] += attempt['total']
+        finished = attempt['finished_at']
+        if finished and (student_stats[student_id]['earliest_finished'] is None or finished < student_stats[student_id]['earliest_finished']):
+            student_stats[student_id]['earliest_finished'] = finished
 
     if not student_stats:
         return []
@@ -998,12 +1015,13 @@ def get_global_leaderboard(mentor, limit=10):
 
         student = students_map.get(student_id)
         if student:
-            results.append((student, rating_score, avg_percentage, total_quizzes))
+            results.append((student, rating_score, avg_percentage, total_quizzes, stats['earliest_finished']))
 
-    # Sort by rating score descending
-    results.sort(key=lambda x: (-x[1], -x[2], -x[3]))
+    # Sort by rating score descending, then by earliest finish time (earlier = higher rank)
+    results.sort(key=lambda x: (-x[1], -x[2], -x[3], x[4] or timezone.now()))
 
-    return results[:limit]
+    # Return 4-tuples (strip earliest_finished used only for sorting)
+    return [(s, r, a, q) for s, r, a, q, _ in results[:limit]]
 
 
 def is_exam_mode(quiz) -> bool:
@@ -1086,15 +1104,18 @@ def get_student_rank(student, mentor):
         quiz__available_until__isnull=False
     ).filter(
         started_at__lt=F('quiz__available_until')
-    ).values('student_id', 'quiz_id', 'score', 'total')
+    ).values('student_id', 'quiz_id', 'score', 'total', 'finished_at')
 
     # Group by student
-    student_stats = defaultdict(lambda: {'quizzes': set(), 'total_score': 0, 'total_questions': 0})
+    student_stats = defaultdict(lambda: {'quizzes': set(), 'total_score': 0, 'total_questions': 0, 'earliest_finished': None})
     for attempt in valid_attempts:
         student_id = attempt['student_id']
         student_stats[student_id]['quizzes'].add(attempt['quiz_id'])
         student_stats[student_id]['total_score'] += attempt['score']
         student_stats[student_id]['total_questions'] += attempt['total']
+        finished = attempt['finished_at']
+        if finished and (student_stats[student_id]['earliest_finished'] is None or finished < student_stats[student_id]['earliest_finished']):
+            student_stats[student_id]['earliest_finished'] = finished
 
     # Calculate ratings
     student_data = []
@@ -1114,11 +1135,12 @@ def get_student_rank(student, mentor):
             'id': student_id,
             'rating_score': rating_score,
             'avg_percentage': avg_percentage,
-            'total_quizzes': total_quizzes
+            'total_quizzes': total_quizzes,
+            'earliest_finished': stats['earliest_finished']
         })
 
-    # Sort by rating score descending
-    student_data.sort(key=lambda x: (-x['rating_score'], -x['avg_percentage'], -x['total_quizzes']))
+    # Sort by rating score descending, then by earliest finish time (earlier = higher rank)
+    student_data.sort(key=lambda x: (-x['rating_score'], -x['avg_percentage'], -x['total_quizzes'], x['earliest_finished'] or timezone.now()))
 
     # Find student's position
     for rank, s_data in enumerate(student_data, 1):
@@ -1147,7 +1169,7 @@ def get_season_leaderboard(season, limit=100):
     ratings = SeasonRating.objects.filter(
         season=season,
         rating_score__gt=0
-    ).select_related('student').order_by('-rating_score')
+    ).select_related('student').order_by('-rating_score', 'earliest_attempt_at')
 
     # Filter out test accounts and apply limit
     results = []
@@ -1194,12 +1216,23 @@ def get_student_season_rank(student, season):
     try:
         rating = SeasonRating.objects.get(season=season, student=student)
         
-        # Count how many students have higher rating
-        higher_count = SeasonRating.objects.filter(
-            season=season,
-            rating_score__gt=rating.rating_score
-        ).count()
-        
+        # Count how many students have higher rating or same rating but earlier attempts
+        from django.db.models import Q
+        higher_q = Q(rating_score__gt=rating.rating_score)
+        if rating.earliest_attempt_at:
+            same_but_earlier_q = Q(
+                rating_score=rating.rating_score,
+                earliest_attempt_at__lt=rating.earliest_attempt_at
+            )
+            higher_count = SeasonRating.objects.filter(
+                season=season
+            ).filter(higher_q | same_but_earlier_q).count()
+        else:
+            higher_count = SeasonRating.objects.filter(
+                season=season,
+                rating_score__gt=rating.rating_score
+            ).count()
+
         rank = higher_count + 1
         return (rank, round(rating.rating_score, 1), round(rating.avg_percentage, 1), rating.total_ranked_quizzes)
     except SeasonRating.DoesNotExist:

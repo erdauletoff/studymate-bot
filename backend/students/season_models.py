@@ -213,6 +213,12 @@ class SeasonRating(models.Model):
         verbose_name="Rating Score",
         help_text="Calculated: avg_percentage × (1 + min(total_quizzes/10, 1) × 0.5)"
     )
+    earliest_attempt_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name="Earliest Attempt",
+        help_text="Earliest finished_at among valid ranked attempts (for tiebreaking)"
+    )
 
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -266,20 +272,23 @@ class SeasonRating(models.Model):
             self.total_possible = 0
             self.avg_percentage = 0.0
             self.rating_score = 0.0
+            self.earliest_attempt_at = None
             self.save()
             return
 
         # Calculate metrics
-        from django.db.models import Sum
+        from django.db.models import Sum, Min
 
         self.total_ranked_quizzes = valid_attempts.values('quiz').distinct().count()
 
         aggregates = valid_attempts.aggregate(
             total_score=Sum('score'),
-            total_possible=Sum('total')
+            total_possible=Sum('total'),
+            earliest_finished=Min('finished_at')
         )
         self.total_score = aggregates['total_score'] or 0
         self.total_possible = aggregates['total_possible'] or 0
+        self.earliest_attempt_at = aggregates['earliest_finished']
 
         # Average percentage
         self.avg_percentage = round((self.total_score / self.total_possible * 100), 1) if self.total_possible > 0 else 0
