@@ -1018,7 +1018,9 @@ def get_global_leaderboard(mentor, limit=10):
             results.append((student, rating_score, avg_percentage, total_quizzes, stats['earliest_finished']))
 
     # Sort by rating score descending, then by earliest finish time (earlier = higher rank)
-    results.sort(key=lambda x: (-x[1], -x[2], -x[3], x[4] or timezone.now()))
+    # Use far-future date for None to sort students without finish time last
+    far_future = timezone.now().replace(year=9999)
+    results.sort(key=lambda x: (-x[1], -x[2], -x[3], x[4] or far_future, x[0].id))
 
     # Return 4-tuples (strip earliest_finished used only for sorting)
     return [(s, r, a, q) for s, r, a, q, _ in results[:limit]]
@@ -1140,7 +1142,9 @@ def get_student_rank(student, mentor):
         })
 
     # Sort by rating score descending, then by earliest finish time (earlier = higher rank)
-    student_data.sort(key=lambda x: (-x['rating_score'], -x['avg_percentage'], -x['total_quizzes'], x['earliest_finished'] or timezone.now()))
+    # Use far-future date for None to sort students without finish time last
+    far_future = timezone.now().replace(year=9999)
+    student_data.sort(key=lambda x: (-x['rating_score'], -x['avg_percentage'], -x['total_quizzes'], x['earliest_finished'] or far_future, x['id']))
 
     # Find student's position
     for rank, s_data in enumerate(student_data, 1):
@@ -1166,10 +1170,16 @@ def get_season_leaderboard(season, limit=100):
     """
     test_ids = get_test_student_ids()
 
+    from django.db.models import F
+
     ratings = SeasonRating.objects.filter(
         season=season,
         rating_score__gt=0
-    ).select_related('student').order_by('-rating_score', 'earliest_attempt_at')
+    ).select_related('student').order_by(
+        '-rating_score',
+        F('earliest_attempt_at').asc(nulls_last=True),
+        'student_id'
+    )
 
     # Filter out test accounts and apply limit
     results = []
@@ -1217,6 +1227,7 @@ def get_student_season_rank(student, season):
         rating = SeasonRating.objects.get(season=season, student=student)
         
         # Count how many students have higher rating or same rating but earlier attempts
+        # Also use student_id as final tiebreaker for deterministic ranking
         from django.db.models import Q
         higher_q = Q(rating_score__gt=rating.rating_score)
         if rating.earliest_attempt_at:
@@ -1224,14 +1235,30 @@ def get_student_season_rank(student, season):
                 rating_score=rating.rating_score,
                 earliest_attempt_at__lt=rating.earliest_attempt_at
             )
+            same_time_lower_id_q = Q(
+                rating_score=rating.rating_score,
+                earliest_attempt_at=rating.earliest_attempt_at,
+                student_id__lt=rating.student_id
+            )
             higher_count = SeasonRating.objects.filter(
                 season=season
-            ).filter(higher_q | same_but_earlier_q).count()
+            ).filter(higher_q | same_but_earlier_q | same_time_lower_id_q).count()
         else:
+            # No earliest_attempt_at: count students with higher rating,
+            # or same rating but with an actual earliest_attempt_at (they rank higher),
+            # or same rating + also NULL earliest_attempt_at but lower student_id
+            same_with_attempt_q = Q(
+                rating_score=rating.rating_score,
+                earliest_attempt_at__isnull=False
+            )
+            same_null_lower_id_q = Q(
+                rating_score=rating.rating_score,
+                earliest_attempt_at__isnull=True,
+                student_id__lt=rating.student_id
+            )
             higher_count = SeasonRating.objects.filter(
-                season=season,
-                rating_score__gt=rating.rating_score
-            ).count()
+                season=season
+            ).filter(higher_q | same_with_attempt_q | same_null_lower_id_q).count()
 
         rank = higher_count + 1
         return (rank, round(rating.rating_score, 1), round(rating.avg_percentage, 1), rating.total_ranked_quizzes)
